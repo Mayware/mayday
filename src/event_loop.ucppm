@@ -1,0 +1,37 @@
+module;
+#include <mayquill/logger.h>
+#include <sys/epoll.h>
+export module event_loop;
+import mayquill;
+
+class EventLoop {
+  private:
+	int epoll_fd;
+    std::vector<epoll_event> events;
+
+  public:
+	// enum class Interest {
+		READ
+	// };
+
+	EventLoop() {
+		epoll_fd = epoll_create1(0);
+		if (epoll_fd == -1) {
+			MQ_ERROR("Failed to create epoll_fd");
+		};
+	}
+
+	template<typename Fn>
+	void add_fd(int fd, Interest interest, Fn callback) {
+		auto event = epoll_event {
+			.events = interest,
+			.data = epoll_data_t {
+				.fd = fd,
+			}};
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event); // will copy event
+	}
+
+	void yield() {
+		int event_count = epoll_wait(epoll_fd, events.data(), 1, -1); // -1 means no timeout
+	}
+};
