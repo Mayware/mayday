@@ -1,30 +1,21 @@
 module mayquill;
-import util;
+import :roles;
+import :util;
 
 namespace mayquill {
-struct WlrLayerSurfaceData {
-	std::optional<Key> output;
-	ZwlrLayerShellV1::LayerEnum layer;
-	std::string _namespace;
-};
-
 void ZwlrLayerShellV1::handle(Request request) {
 	std::visit(overload {
 				   [this](GetLayerSurface& request) {
 					   client.add_object<ZwlrLayerSurfaceV1>(request.id,
-						   std::make_unique<WlrLayerSurfaceData>(WlrLayerSurfaceData {
-							   .output = request.output ? std::optional(client.grab_object<WlOutput>(*request.output).key) : std::nullopt,
-							   .layer = request.layer,
-							   ._namespace = request._namespace,
-						   }));
+						   std::make_unique<ZwlrLayerSurfaceData>(
+                               request.output ? std::optional(client.grab_object<WlOutput>(*request.output).key) : std::nullopt,
+                               request.layer,
+                               request._namespace
+						   ));
 				   },
 				   [this](Destroy& request) {}},
 		request);
 }
-
-struct XdgSurfaceData {
-	Key surface;
-};
 
 void XdgWmBase::handle(Request request) {
 	std::visit(overload {
@@ -33,9 +24,7 @@ void XdgWmBase::handle(Request request) {
 				   },
 				   [this](GetXdgSurface& request) {
 					   client.add_object<XdgSurface>(request.id,
-						   std::make_unique<XdgSurfaceData>(XdgSurfaceData {
-							   .surface = client.grab_object<WlSurface>(request.surface).key,
-						   }));
+						   std::make_unique<XdgSurfaceData>(client.grab_object<WlSurface>(request.surface).key));
 				   },
 				   [this](Pong& request) {},
 				   [this](Destroy& request) {},
@@ -77,4 +66,12 @@ void XdgToplevel::handle(Request request) {
 		request);
 }
 
+void XdgPopup::handle(Request request) {
+	std::visit(overload {
+				   [this](Grab& request) {},
+				   [this](Reposition& request) {},
+				   [this](Destroy& request) {},
+			   },
+		request);
+}
 } // namespace mayquill
