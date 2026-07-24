@@ -11,10 +11,13 @@ void WpFractionalScaleManagerV1::handle(Request request) {
 	std::visit(overload {
 				   [this](GetFractionalScale& request) {
 					   auto surface = client.grab_object<WlSurface>(request.surface);
-					   auto fractional = client.add_object<WpFractionalScaleV1>(request.id);
+					   auto fractional = client.add_object<WpFractionalScaleV1>(request.id,
+						   std::make_unique<WpFractionalScaleData>(surface.key));
 					   gimme_data<WlSurfaceData>(surface).fractional_scale = fractional.key;
 				   },
 				   [this](Destroy& request) {
+                        auto& surface = client.get_object<WlSurface>(gimme_data<WpFractionalScaleData>(user_data).surface);
+                        gimme_data<WlSurfaceData>(surface).fractional_scale = std::nullopt;
 				   }},
 		request);
 }
@@ -23,7 +26,11 @@ void WlCompositor::handle(Request request) {
 	std::visit(overload {
 				   [this](CreateSurface& request) {
 					   client.add_object<WlSurface>(request.id,
-						   std::make_unique<WlSurfaceData>(std::nullopt, Buffered<std::optional<Key>>(std::nullopt), std::nullopt, std::vector<Key> {}));
+						   std::make_unique<WlSurfaceData>(
+							   std::nullopt,
+							   Buffered<std::optional<Key>>(std::nullopt),
+							   std::nullopt,
+							   std::vector<Key> {}));
 				   },
 				   [this](CreateRegion& request) {
 					   client.add_object<WlRegion>(request.id);
@@ -80,7 +87,14 @@ void WlSubsurface::handle(Request request) {
 				   [this](PlaceBelow& request) {},
 				   [this](SetSync& request) {},
 				   [this](SetDesync& request) {},
-				   [this](Destroy& request) {},
+				   [this](Destroy& request) {
+					   auto& subsurface_data = gimme_data<WlSubsurfaceData>(user_data);
+					   auto& surface = client.get_object<WlSurface>(subsurface_data.surface);
+					   gimme_data<WlSurfaceData>(surface).set_role(std::nullopt);
+
+					   auto& parent = client.get_object<WlSurface>(subsurface_data.parent);
+					   std::erase(gimme_data<WlSurfaceData>(parent).children, keyd);
+				   },
 			   },
 		request);
 }

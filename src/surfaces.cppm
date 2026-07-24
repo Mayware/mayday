@@ -3,7 +3,7 @@ module;
 module mayquill:surfaces;
 import :logger;
 import :definitions;
-import :roles;
+import :shell;
 import :client;
 import :util;
 import std;
@@ -15,16 +15,12 @@ struct WlSubsurfaceData {
 	Key parent;
 };
 
-struct WlSurfaceData {
-	std::optional<Key> fractional_scale;
-	Buffered<std::optional<Key>> buffer;
-
-	using Role = std::optional<std::variant<XdgSurfaceData*, WlSubsurfaceData*, ZwlrLayerSurfaceData*>>;
-	Role role;
-	std::vector<Key> children; // Subsurfaces are the chidlren
-
+class WlSurfaceData {
+  private:
+	using Role = std::optional<std::variant<XdgToplevelData*, XdgPopupData*, WlSubsurfaceData*, ZwlrLayerSurfaceData*>>;
 	enum class RoleEnum {
-		XdgSurface,
+		XdgToplevel,
+		XdgPopup,
 		WlSubsurface,
 		ZwlrLayerSurface,
 	};
@@ -32,22 +28,38 @@ struct WlSurfaceData {
 	// as the first role was
 	std::optional<RoleEnum> first_role;
 
-	bool set_role(Role new_role) {
+  public:
+	std::optional<Key> fractional_scale;
+	Buffered<std::optional<Key>> buffer;
+	Role role;
+	std::vector<Key> children; // Subsurfaces are the chidlren
 
-        // Remove the current role if std::nullopt is given
+	WlSurfaceData(
+		std::optional<Key> fractional_scale,
+		Buffered<std::optional<Key>> buffer,
+		Role role,
+		std::vector<Key> children) : fractional_scale(std::move(fractional_scale)),
+									 buffer(std::move(buffer)),
+									 role(std::move(role)),
+									 children(std::move(children)) {}
+
+	bool set_role(Role new_role) {
+		// Remove the current role if std::nullopt is given
 		if (!new_role) {
 			role = std::nullopt;
 			return true;
 		}
-
-        // Check if the surface already has a role
-        if (role) return false;
+		// Check if the surface already has a role
+		if (role)
+			return false;
 
 		RoleEnum new_role_enum = std::visit(
 			[]<typename T>(T) -> RoleEnum {
-                using Type = std::remove_pointer_t<T>;
-				if constexpr (std::is_same_v<Type, XdgSurfaceData>) {
-					return RoleEnum::XdgSurface;
+				using Type = std::remove_pointer_t<T>;
+				if constexpr (std::is_same_v<Type, XdgToplevelData>) {
+					return RoleEnum::XdgToplevel;
+				} else if constexpr (std::is_same_v<Type, XdgPopupData>) {
+					return RoleEnum::XdgPopup;
 				} else if constexpr (std::is_same_v<Type, WlSubsurfaceData>) {
 					return RoleEnum::WlSubsurface;
 				} else if constexpr (std::is_same_v<Type, ZwlrLayerSurfaceData>) {
@@ -58,13 +70,13 @@ struct WlSurfaceData {
 			},
 			*new_role);
 
-        // Check if the new role is the same as the old one (or if it is the first one)
+		// Check if the new role is the same as the old one (or if it is the first one)
 		if (!first_role || *first_role == new_role_enum) {
 			first_role = new_role_enum;
 			role = new_role;
-            return true;
+			return true;
 		} else {
-            return false;
+			return false;
 		}
 	}
 };
