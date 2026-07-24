@@ -17,67 +17,52 @@ struct WlSubsurfaceData {
 
 class WlSurfaceData {
   private:
-	using Role = std::optional<std::variant<XdgToplevelData*, XdgPopupData*, WlSubsurfaceData*, ZwlrLayerSurfaceData*>>;
-	enum class RoleEnum {
-		XdgToplevel,
-		XdgPopup,
-		WlSubsurface,
-		ZwlrLayerSurface,
-	};
-	// A role can be removed, but if re-assigned, it must be the same role
-	// as the first role was
-	std::optional<RoleEnum> first_role;
+	using RoleList = TypeList<XdgToplevel*, XdgPopup*, WlSubsurface*, ZwlrLayerSurfaceV1*>;
 
   public:
 	std::optional<Key> fractional_scale;
 	Buffered<std::optional<Key>> buffer;
-	Role role;
+	std::optional<Key> role;
 	std::vector<Key> children; // Subsurfaces are the chidlren
+
+	// A role can be removed, but if re-assigned, it must be the same role
+	// as the first role was
+	std::optional<std::size_t> first_role;
 
 	WlSurfaceData(
 		std::optional<Key> fractional_scale,
 		Buffered<std::optional<Key>> buffer,
-		Role role,
+		std::optional<Key> role,
 		std::vector<Key> children) : fractional_scale(std::move(fractional_scale)),
 									 buffer(std::move(buffer)),
 									 role(std::move(role)),
 									 children(std::move(children)) {}
 
-	bool set_role(Role new_role) {
-		// Remove the current role if std::nullopt is given
-		if (!new_role) {
-			role = std::nullopt;
-			return true;
-		}
+	template<typename T>
+	bool set_role(Key key) {
+		static_assert(contains_v<RoleList, T>, "T isn't a valid role");
 		// Check if the surface already has a role
 		if (role)
 			return false;
 
-		RoleEnum new_role_enum = std::visit(
-			[]<typename T>(T) -> RoleEnum {
-				using Type = std::remove_pointer_t<T>;
-				if constexpr (std::is_same_v<Type, XdgToplevelData>) {
-					return RoleEnum::XdgToplevel;
-				} else if constexpr (std::is_same_v<Type, XdgPopupData>) {
-					return RoleEnum::XdgPopup;
-				} else if constexpr (std::is_same_v<Type, WlSubsurfaceData>) {
-					return RoleEnum::WlSubsurface;
-				} else if constexpr (std::is_same_v<Type, ZwlrLayerSurfaceData>) {
-					return RoleEnum::ZwlrLayerSurface;
-				} else {
-					static_assert(false, "Invalid role enum");
-				}
-			},
-			*new_role);
+		// Get the index the role is
+		static constexpr std::size_t new_role = type_index_v<RoleList, T>;
 
-		// Check if the new role is the same as the old one (or if it is the first one)
-		if (!first_role || *first_role == new_role_enum) {
-			first_role = new_role_enum;
-			role = new_role;
-			return true;
-		} else {
+		// Check if we're trying to set a different role to the one already set
+		// (skipped if there isn't one set)
+		if (first_role && *first_role != new_role)
 			return false;
-		}
+
+		// Set the permenant role type
+		if (!first_role)
+			first_role = new_role;
+
+		role = key;
+		return true;
+	}
+
+	void remove_role() {
+		role = std::nullopt;
 	}
 };
 }; // namespace mayquill

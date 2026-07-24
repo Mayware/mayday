@@ -14,7 +14,7 @@ void ZwlrLayerShellV1::handle(Request request) {
 							   request.output ? std::optional(client.grab_object<WlOutput>(*request.output).key) : std::nullopt,
 							   request.layer,
 							   request._namespace));
-					   gimme_data<WlSurfaceData>(surface).set_role(&gimme_data<ZwlrLayerSurfaceData>(layer_surface));
+					   gimme_data<WlSurfaceData>(surface).set_role<ZwlrLayerSurfaceV1*>(layer_surface.key);
 				   },
 				   [this](Destroy& request) {}},
 		request);
@@ -32,7 +32,7 @@ void ZwlrLayerSurfaceV1::handle(Request request) {
 				   [this](Destroy& request) {
 					   auto& surface = client.get_object<WlSurface>(
 						   gimme_data<ZwlrLayerSurfaceData>(user_data).surface);
-					   gimme_data<WlSurfaceData>(surface).set_role(std::nullopt);
+					   gimme_data<WlSurfaceData>(surface).remove_role();
 				   },
 				   [this](SetLayer& request) {},
 				   [this](SetExclusiveEdge& request) {},
@@ -63,14 +63,14 @@ void XdgSurface::handle(Request request) {
 					   auto& surface = client.get_object<WlSurface>(surface_key);
 					   auto toplevel = client.add_object<XdgToplevel>(request.id,
 						   std::make_unique<XdgToplevelData>(surface_key, keyd));
-					   gimme_data<WlSurfaceData>(surface).set_role(&gimme_data<XdgToplevelData>(toplevel));
+					   gimme_data<WlSurfaceData>(surface).set_role<XdgToplevel*>(toplevel.key);
 				   },
 				   [this](GetPopup& request) {
 					   auto surface_key = gimme_data<XdgSurfaceData>(user_data).surface;
 					   auto& surface = client.get_object<WlSurface>(surface_key);
 					   auto popup = client.add_object<XdgPopup>(request.id,
 						   std::make_unique<XdgPopupData>(surface_key, keyd));
-					   gimme_data<WlSurfaceData>(surface).set_role(&gimme_data<XdgPopupData>(popup));
+					   gimme_data<WlSurfaceData>(surface).set_role<XdgPopup*>(popup.key);
 				   },
 				   [this](SetWindowGeometry& request) {},
 				   [this](AckConfigure& request) {},
@@ -96,7 +96,7 @@ void XdgToplevel::handle(Request request) {
 				   [this](SetMinimized& request) {},
 				   [this](Destroy& request) {
 					   auto& surface = client.get_object<WlSurface>(gimme_data<XdgToplevelData>(user_data).surface);
-					   gimme_data<WlSurfaceData>(surface).set_role(std::nullopt);
+					   gimme_data<WlSurfaceData>(surface).remove_role();
 				   },
 			   },
 		request);
@@ -108,7 +108,7 @@ void XdgPopup::handle(Request request) {
 				   [this](Reposition& request) {},
 				   [this](Destroy& request) {
 					   auto& surface = client.get_object<WlSurface>(gimme_data<XdgPopupData>(user_data).surface);
-					   gimme_data<WlSurfaceData>(surface).set_role(std::nullopt);
+					   gimme_data<WlSurfaceData>(surface).remove_role();
 				   },
 			   },
 		request);
