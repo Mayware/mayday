@@ -9,8 +9,18 @@ build() {
     fi
 }
 
-build clang
-build gcc
+arg="${1:-gcc}"
+case "$arg" in
+    debug)
+        build debug
+        ;;
+    clang)
+        build clang
+        ;;
+    *)
+        build gcc
+        ;;
+esac
 
 cleanup() {
     printf "\n%s" "Cleaning stale socket"
@@ -20,4 +30,4 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Running program"
-./build/build-gcc/mayday
+./build/"build-$arg"/mayday

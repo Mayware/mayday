@@ -7,11 +7,6 @@ set(CMAKE_CXX_MODULE_STD ON)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-#> Debug by default
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Debug)
-endif()
-
 project(mayday)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mayquill ${CMAKE_CURRENT_BINARY_DIR}/mayquill)
