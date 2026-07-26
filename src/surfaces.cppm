@@ -5,7 +5,7 @@ import :logger;
 import :definitions;
 import :shell;
 import :client;
-import :util;
+import mayday.util;
 import std;
 
 namespace mayquill {

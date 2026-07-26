@@ -1,5 +1,5 @@
 module mayquill;
-import :util;
+import mayday.util;
 import std;
 
 namespace mayquill {

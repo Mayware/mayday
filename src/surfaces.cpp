@@ -3,7 +3,7 @@ module;
 #include <cassert>
 module mayquill;
 import :surfaces;
-import :util;
+import mayday.util;
 
 namespace mayquill {
 struct WpFractionalScaleData {

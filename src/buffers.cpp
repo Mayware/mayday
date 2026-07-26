@@ -3,7 +3,7 @@ module;
 #include <unistd.h>
 module mayquill;
 import :surfaces;
-import :util;
+import mayday.util;
 
 namespace mayquill {
 // Also owned by all the shm buffers that are from that shm pool. Upon the last shm buffer release, this is then destroyed,

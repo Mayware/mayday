@@ -1,6 +1,5 @@
-export module mayquill:util;
+export module mayday.util;
 import std;
-import :definitions;
 
 // For variant matching
 export template<class... Ts>
@@ -100,6 +99,6 @@ class Defer {
   private:
       Fn callback;
   public:
-	Defer(Fn callback) : callback(callback) {}
+	Defer(Fn callback) : callback(std::move(callback)) {}
     ~Defer()  { callback(); }
 };

@@ -1,6 +1,7 @@
 #include <mayquill/logger.h>
 #include <sys/epoll.h>
 import mayquill;
+import mayday.drm;
 import std;
 
 using namespace mayquill;
@@ -11,12 +12,13 @@ int main() {
 	std::exit(1);
 #endif
 
-	Server server;
-	server.bind_socket();
+	// Server server;
+	// server.bind_socket();
 
-	while (true) {
-		server.try_accept_clients();
-		server.try_listen_requests();
-		server.try_flush_events();
-	}
+	// while (true) {
+	// 	server.try_accept_clients();
+	// 	server.try_listen_requests();
+	// 	server.try_flush_events();
+	// }
+    start();
 }

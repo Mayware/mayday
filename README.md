@@ -2,6 +2,13 @@
 **WIP**\
 This is a wayland compositor that exists to serve WMs. Think of it as the XServer, but for wayland. For the small fry, by the small fry.
 
+## Scripts
+`gen.sh` re-runs mayquill's generator
+`mkbuild.sh` generates the build directories for mayday. It also runs `gen.sh`
+`build.sh` builds mayday
+`execute.sh` executes mayday
+`run.sh` runs both `build.sh` and `execute.sh`
+
 ## Architecture
 Every (most) objects have an associated ObjectData struct, that is their user_data. For ObjectData's that are structs, that means all their fields are meant to be directly assigned.\
 For those that are classes, it means they have a constructor. 

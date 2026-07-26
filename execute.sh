@@ -4,11 +4,8 @@ cd "$(dirname "$0")"
 
 arg="${1:-gcc}"
 
-build.sh "$arg"
-execute.sh "$arg"
-
 cleanup() {
-    printf "\n%s" "Cleaning stale socket"
+    printf "%s\n" "Cleaning stale socket"
     rm -f "${XDG_RUNTIME_DIR}/wayland-0"
 }
 

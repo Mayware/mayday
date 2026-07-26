@@ -1,6 +1,6 @@
 module mayquill;
 import :shell;
-import :util;
+import mayday.util;
 import :surfaces;
 
 namespace mayquill {
