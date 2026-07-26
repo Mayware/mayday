@@ -20,23 +20,17 @@ class WlSurfaceData {
 	using RoleList = TypeList<XdgToplevel*, XdgPopup*, WlSubsurface*, ZwlrLayerSurfaceV1*>;
 
   public:
-	std::optional<Key> fractional_scale;
-	Buffered<std::optional<Key>> buffer;
-	std::optional<Key> role;
-	std::vector<Key> children; // Subsurfaces are the chidlren
+	std::optional<Key> fractional_scale = std::nullopt;
+	Buffered<std::optional<Key>> buffer = Buffered<std::optional<Key>>(std::nullopt);
+	std::optional<Key> role = std::nullopt;
+	std::vector<Key> children = std::vector<Key> {}; // Subsurfaces are the chidlren
+    bool initial_configured = false;
 
 	// A role can be removed, but if re-assigned, it must be the same role
 	// as the first role was
 	std::optional<std::size_t> first_role;
 
-	WlSurfaceData(
-		std::optional<Key> fractional_scale,
-		Buffered<std::optional<Key>> buffer,
-		std::optional<Key> role,
-		std::vector<Key> children) : fractional_scale(std::move(fractional_scale)),
-									 buffer(std::move(buffer)),
-									 role(std::move(role)),
-									 children(std::move(children)) {}
+	WlSurfaceData() {};
 
 	template<typename T>
 	bool set_role(Key key) {
@@ -60,6 +54,15 @@ class WlSurfaceData {
 		role = key;
 		return true;
 	}
+
+    // Void means empty
+    template<typename T>
+    bool is_role() {
+        if constexpr (std::is_same_v<T, void>) {
+             return first_role ? false : true;
+        }
+        return *first_role == type_index_v<RoleList, T>;
+    }
 
 	void remove_role() {
 		role = std::nullopt;

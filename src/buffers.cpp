@@ -48,13 +48,7 @@ void WlShmPool::handle(Request request) {
 	std::visit(overload {
 				   [this, &pool_data](CreateBuffer& request) {
 					   client.add_object<WlBuffer>(request.id,
-						   std::make_unique<WlBufferData>(WlBufferData {
-							   .pool = pool_data,
-							   .offset = request.offset,
-							   .width = request.width,
-							   .height = request.height,
-							   .stride = request.stride,
-							   .format = request.format}));
+						   std::make_unique<WlBufferData>(pool_data, request.offset, request.width, request.height, request.stride, request.format));
 				   },
 				   [this, &pool_data](Resize& request) {
 					   auto start = static_cast<std::byte*>(mremap(pool_data.get()->start, pool_data->size, request.size, MREMAP_MAYMOVE));

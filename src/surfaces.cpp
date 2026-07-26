@@ -1,3 +1,6 @@
+module;
+#include "mayquill/logger.h"
+#include <cassert>
 module mayquill;
 import :surfaces;
 import :util;
@@ -26,11 +29,7 @@ void WlCompositor::handle(Request request) {
 	std::visit(overload {
 				   [this](CreateSurface& request) {
 					   client.add_object<WlSurface>(request.id,
-						   std::make_unique<WlSurfaceData>(
-							   std::nullopt,
-							   Buffered<std::optional<Key>>(std::nullopt),
-							   std::nullopt,
-							   std::vector<Key> {}));
+						   std::make_unique<WlSurfaceData>());
 				   },
 				   [this](CreateRegion& request) {
 					   client.add_object<WlRegion>(request.id);
@@ -53,15 +52,38 @@ void WlSurface::handle(Request request) {
 				   [this](Frame& request) {
 					   auto callback = client.add_object<WlCallback>(request.callback);
 					   callback.object.done(client.elapsed_time());
+                       callback.object.destroy();
 				   },
 				   [this](SetOpaqueRegion& request) {},
 				   [this](SetInputRegion& request) {},
 				   [this, &surface_data](Commit& request) {
 					   surface_data.buffer.commit();
-					   auto& toplevel = client.get_object<XdgToplevel>(*surface_data.role);
-					   toplevel.configure(0, 0, std::vector<std::uint8_t> {});
-					   auto& xdg_surface = client.get_object<XdgSurface>(gimme_data<XdgToplevelData>(toplevel).xdg_surface);
-					   xdg_surface.configure(client.next_serial());
+
+					   if (surface_data.initial_configured == false) {
+						   if (surface_data.is_role<XdgToplevel*>() || surface_data.is_role<XdgPopup*>()) {
+                               XdgSurface* xdg_surface;
+							   if (surface_data.is_role<XdgToplevel*>()) {
+								   auto& toplevel = client.get_object<XdgToplevel>(*surface_data.role);
+								   toplevel.configure(0, 0, std::vector<std::uint8_t> {});
+                                   xdg_surface = &client.get_object<XdgSurface>(gimme_data<XdgToplevelData>(toplevel).xdg_surface);
+							   } else {
+                                   assert(false);
+							   }
+							   xdg_surface->configure(client.next_serial(gimme_data<XdgSurfaceData>(*xdg_surface).serials));
+                               surface_data.initial_configured = true;
+						   } else if (surface_data.is_role<ZwlrLayerSurfaceV1*>()) {
+                               assert(false);
+						   } else if (surface_data.is_role<WlSubsurface*>()) {
+							   surface_data.initial_configured = true;
+						   } else {
+							   MQ_XERROR("Incorrectly configured role");
+						   }
+                           MQ_INFO("Sent initial configure");
+					   }
+
+                       if (surface_data.buffer.held()) {
+                           client.get_object<WlBuffer>((*surface_data.buffer.held())).release();
+                       }
 				   },
 				   [this](SetBufferTransform& request) {},
 				   [this](SetBufferScale& request) {},

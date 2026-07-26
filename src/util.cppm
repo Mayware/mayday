@@ -2,6 +2,7 @@ export module mayquill:util;
 import std;
 import :definitions;
 
+// For variant matching
 export template<class... Ts>
 struct overload : Ts... {
 	using Ts::operator()...;
@@ -9,6 +10,7 @@ struct overload : Ts... {
 template<class... Ts>
 overload(Ts...) -> overload<Ts...>;
 
+// Buffered class, allows for a pending value which eventually overwrites the current
 export template<typename T>
 class Buffered {
   private:
@@ -31,9 +33,21 @@ class Buffered {
 			dirty = false;
 		}
 	}
+
+	// Returns T is T is trivially copyable, else, returns T&
+	decltype(auto) held() {
+		if constexpr (std::is_trivially_copyable_v<T>) {
+			return current;
+		} else {
+			// When decltype sees an arg wrapped in parenthesis, it appends & to the type
+			// https://en.cppreference.com/cpp/language/decltype
+			return (current);
+		}
+	}
 };
 
 // A helper to return the userdata, from any of the following heirarchies
+// T&& is a forwarding type (not temporary), so it allows references, and temporaries
 export template<typename T, typename Target>
 T& gimme_data(Target&& target) {
 	if constexpr (requires { target.object.user_data.get(); }) {
@@ -47,9 +61,9 @@ T& gimme_data(Target&& target) {
 	}
 }
 
+// Aribtrary typelist, for example TypeList<MyTyp1, MyType2>
 export template<typename... Types>
 struct TypeList {};
-
 // Contains functionality
 template<typename List, typename T>
 struct Contains;
@@ -80,3 +94,12 @@ struct TypeIndex<TypeList<First, Types...>, T> {
 };
 export template<typename List, typename T>
 constexpr std::size_t type_index_v = TypeIndex<List, T>::value;
+
+export template<typename Fn>
+class Defer {
+  private:
+      Fn callback;
+  public:
+	Defer(Fn callback) : callback(callback) {}
+    ~Defer()  { callback(); }
+};

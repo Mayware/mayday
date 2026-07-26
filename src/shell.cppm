@@ -11,8 +11,13 @@ struct ZwlrLayerSurfaceData {
 	std::string _namespace;
 };
 
-struct XdgSurfaceData {
+class XdgSurfaceData {
+  public:
 	Key surface;
+	// Serials that are currently in flight
+	std::deque<std::uint32_t> serials = std::deque<std::uint32_t>();
+
+	XdgSurfaceData(Key surface) : surface(surface) {}
 };
 
 struct XdgToplevelData {

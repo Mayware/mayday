@@ -9,6 +9,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(mayday)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mayquill ${CMAKE_CURRENT_BINARY_DIR}/mayquill)
 add_executable(mayday)
 
@@ -20,5 +22,10 @@ target_sources(mayday
         ${IMPL_FILES}
     PRIVATE FILE_SET CXX_MODULES FILES
         ${INTERFACE_FILES}
+    PUBLIC FILE_SET HEADERS
+        BASE_DIRS src FILES
+            src/mayday/macros.h
+
 )
 target_link_libraries(mayday PRIVATE mayquill)
+target_link_libraries(mayday PRIVATE PkgConfig::LIBDRM)
