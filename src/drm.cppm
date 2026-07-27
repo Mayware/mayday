@@ -2,6 +2,7 @@ module;
 #include <drm_fourcc.h>
 #include <fcntl.h>
 #include <mayday/macros.h>
+#include <mayday/libseat.h>
 #include <mayquill/logger.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -75,11 +76,50 @@ auto get_property_handle(int fd, std::int32_t handle, std::uint32_t object_type,
 		});
 }
 
+struct App {
+	libseat* seat;
+	bool active;
+	int device_id;
+	int device_fd;
+};
+
+void enable_seat(libseat* seat, void* user_data) {
+	auto app = static_cast<App*>(user_data);
+	app->active = true;
+	MQ_INFO("Seat was enabled");
+}
+
+void disable_seat(libseat* seat, void* user_data) {
+	auto app = static_cast<App*>(user_data);
+	app->active = false;
+	MQ_INFO("Seat was disabled");
+	libseat_disable_seat(seat);
+}
+
 export void start() {
-	int fd = open("/dev/dri/card0", O_RDWR);
-	if (fd < 0)
-		MQ_XERRNO("Failed to open card");
-	DEFER([fd]() { close(fd); });
+	App app = {};
+	libseat_seat_listener listener = {
+		.enable_seat = enable_seat,
+		.disable_seat = disable_seat,
+	};
+	app.seat = libseat_open_seat(&listener, &app);
+	if (!app.seat)
+		MQ_XERRNO("Failed to open seat");
+	DEFER([&app]() { libseat_close_seat(app.seat); });
+
+	while (!app.active) {
+		if (libseat_dispatch(app.seat, -1) == -1)
+			MQ_XERRNO("Failed to dispatch libseat");
+	}
+
+	// Device id is libseats internal handle to the device, it takes it again when closing the device
+	app.device_id = libseat_open_device(app.seat, "/dev/dri/card0", &app.device_fd);
+	if (app.device_id == -1)
+		MQ_XERRNO("Failed to open device");
+
+	DEFER([&app]() { close(app.device_fd); });
+	DEFER([&app]() { libseat_close_device(app.seat, app.device_id); });
+	int fd = app.device_fd;
 
 	if (drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1))
 		MQ_XERRNO("Failed to enable atomic commits");
@@ -179,7 +219,7 @@ export void start() {
 	auto mode = connector->modes[0];
 	std::uint32_t mode_blob_handle;
 	if (drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &mode_blob_handle))
-        MQ_XERRNO("Failed to create mode property blob");
+		MQ_XERRNO("Failed to create mode property blob");
 	DEFER([fd, mode_blob_handle]() { drmModeDestroyPropertyBlob(fd, mode_blob_handle); });
 	drmModeAtomicAddProperty(atomic_request, crtc_handle, *get_property_handle(fd, crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
 
@@ -268,5 +308,5 @@ export void start() {
 	if (drmModeAtomicCommit(fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
 		MQ_XERRNO("Failed attomic commit");
 
-	sleep(10);
+	sleep(2);
 }

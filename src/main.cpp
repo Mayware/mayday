@@ -1,10 +1,7 @@
 #include <mayquill/logger.h>
-#include <sys/epoll.h>
-import mayquill;
-import mayday.drm;
+import mayday;
+import mayday.epoll;
 import std;
-
-using namespace mayquill;
 
 int main() {
 #ifndef MAYQUILL_ICE
@@ -12,13 +9,18 @@ int main() {
 	std::exit(1);
 #endif
 
-	// Server server;
-	// server.bind_socket();
+	Mayday mayday;
+	Epoll epoll;
 
-	// while (true) {
-	// 	server.try_accept_clients();
-	// 	server.try_listen_requests();
-	// 	server.try_flush_events();
-	// }
-    start();
+	epoll.add_fd(mayday.seat.seat_fd, 0, Epoll::Interest::Readable);
+	auto events = epoll.yield();
+
+	for (auto& event : events) {
+		switch (event.data.u32) {
+		// seat fd
+        case 0: {
+			break;
+		}
+		}
+	}
 }

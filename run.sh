@@ -4,8 +4,8 @@ cd "$(dirname "$0")"
 
 arg="${1:-gcc}"
 
-build.sh "$arg"
-execute.sh "$arg"
+./build.sh "$arg"
+./execute.sh "$arg"
 
 cleanup() {
     printf "\n%s" "Cleaning stale socket"

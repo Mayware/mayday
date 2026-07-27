@@ -12,4 +12,5 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Running program"
+rm -rf log.txt
 ./build/"build-$arg"/mayday
