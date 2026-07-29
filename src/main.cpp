@@ -1,6 +1,7 @@
 #include <mayquill/logger.h>
-import mayday;
-import mayday.epoll;
+// import mayday;
+// import mayday.epoll;
+import mayday.render;
 import std;
 
 int main() {
@@ -9,18 +10,20 @@ int main() {
 	std::exit(1);
 #endif
 
-	Mayday mayday;
-	Epoll epoll;
+    start();
 
-	epoll.add_fd(mayday.seat.seat_fd, 0, Epoll::Interest::Readable);
-	auto events = epoll.yield();
+	// Mayday mayday;
+	// Epoll epoll;
 
-	for (auto& event : events) {
-		switch (event.data.u32) {
-		// seat fd
-        case 0: {
-			break;
-		}
-		}
-	}
+	// epoll.add_fd(mayday.seat.seat_fd, 0, Epoll::Interest::Readable);
+	// auto events = epoll.yield();
+
+	// for (auto& event : events) {
+	// 	switch (event.data.u32) {
+	// 	// seat fd
+	//        case 0: {
+	// 		break;
+	// 	}
+	// 	}
+	// }
 }

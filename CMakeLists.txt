@@ -33,6 +33,24 @@ target_sources(vulkan
 )
 target_link_libraries(mayday PRIVATE vulkan)
 
+#> Shaders
+find_package(Vulkan REQUIRED COMPONENTS glslc)
+file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/*")
+set(SHADER_PRODUCTS)
+foreach(SHADER_SOURCE IN LISTS SHADER_FILES)
+    cmake_path(GET SHADER_SOURCE FILENAME SHADER_NAME)
+    set(SHADER_OUT "${CMAKE_BINARY_DIR}/../shaders/${SHADER_NAME}.spv")
+    add_custom_command(
+        OUTPUT ${SHADER_OUT}
+        COMMAND Vulkan::glslc "${SHADER_SOURCE}" -o "${SHADER_OUT}"
+        DEPENDS ${SHADER_SOURCE}
+        COMMENT "Compiling ${SHADER_NAME}"
+    )
+    list(APPEND SHADER_PRODUCTS ${SHADER_OUT})
+endforeach()
+add_custom_target(shaders ALL DEPENDS ${SHADER_PRODUCTS})
+add_dependencies(mayday shaders)
+
 #> Mayquill
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mayquill ${CMAKE_CURRENT_BINARY_DIR}/mayquill)
 target_link_libraries(mayday PRIVATE mayquill)

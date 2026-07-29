@@ -1,6 +1,6 @@
 module;
 #include <mayquill/logger.h>
-export module render;
+export module mayday.render;
 import vulkan;
 import mayquill;
 
@@ -13,7 +13,22 @@ import mayquill;
 constexpr auto vk_version = vk::ApiVersion14;
 constexpr vk::Format image_format = vk::Format::eB8G8R8A8Unorm;
 
-void start(int fd) {
+export void create_images(std::uint32_t width, std::uint32_t height) {
+
+}
+
+// spirv wordsd are uint32's
+std::vector<std::uint32_t> read_spirv(std::string name) {
+	std::ifstream stream("build/shaders/" + name + ".spv", std::ios::binary | std::ios::ate); // (ate means open file, at the end)
+	if (!stream)
+		MQ_XERROR("Failed to open shaderfile");
+	std::vector<std::uint32_t> spirv(stream.tellg() / sizeof(std::uint32_t));
+	stream.seekg(0);
+	stream.read(reinterpret_cast<char*>(spirv.data()), spirv.size() * sizeof(std::uint32_t));
+	return spirv;
+}
+
+export void start() {
 	// Loads libvulkan (manually, via dlopen), and caches the function pointers to be used for instance creation
 	// and other gloval entry points
 	vk::raii::Context context = {};
@@ -48,7 +63,7 @@ void start(int fd) {
 		// Queue families will advertise capbilities such as `graphics`, `compute`, `transfer, `video decode` etc, implying their supported operations.
 		// Queue families will then have multiple queues within them, all supporting these capabilities.
 		// In our case we'll just take one queue, that supports graphics, and transfer capabilities (transfer allowing for staging buffers and the like)
-		std::uint32_t acceptable_queue_family_index =  std::numeric_limits<std::uint32_t>::max();
+		std::uint32_t acceptable_queue_family_index = std::numeric_limits<std::uint32_t>::max();
 		auto queue_families = physical.getQueueFamilyProperties2();
 		for (int i = 0; i < queue_families.size(); ++i) {
 			auto flags = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eTransfer;
@@ -57,17 +72,19 @@ void start(int fd) {
 				break;
 			}
 		}
-        if (acceptable_queue_family_index ==  std::numeric_limits<std::uint32_t>::max())
-            continue;
+		if (acceptable_queue_family_index == std::numeric_limits<std::uint32_t>::max())
+			continue;
 
 		// Get the supported features. Supported allows us to get the requested features values, as it fills it out
 		auto supported = physical.getFeatures2<
 			vk::PhysicalDeviceFeatures2,
 			vk::PhysicalDeviceVulkan12Features,
-			vk::PhysicalDeviceVulkan13Features>();
+			vk::PhysicalDeviceVulkan13Features,
+			vk::PhysicalDeviceVulkan14Features>();
 
 		auto& supported_12 = supported.get<vk::PhysicalDeviceVulkan12Features>();
 		auto& supported_13 = supported.get<vk::PhysicalDeviceVulkan13Features>();
+		auto& supported_14 = supported.get<vk::PhysicalDeviceVulkan14Features>();
 
 		// Allows for ImageMemoryBarrier2, SubmitInfo2, etc, just the 2ver for synchronisation stuff
 		if (supported_13.synchronization2 == false ||
@@ -76,7 +93,12 @@ void start(int fd) {
 			// Timeline semaphores are submitted with an integer, and then go up to that integer once the work is done
 			// You can submit multiple things with the same semaphore, and since queues are linear, you know if the integer
 			// is the highest one you submitted, then the rest are also done. It's an alternative to fences
-			supported_12.timelineSemaphore == false) {
+			supported_12.timelineSemaphore == false ||
+			// QOL features, the main one we use is that we can pass the shader module info directly to the pipeline now,
+			// and the pipeline will create the module. Without this, we would need to do
+			// auto vert_shader_module = device.createShaderModule(vert_shader_info); and then pass that to the pipeline.
+			// It's just a bit cleaner
+			supported_14.maintenance5 == false) {
 			continue;
 		}
 
@@ -89,7 +111,11 @@ void start(int fd) {
 		MQ_XERROR("No suitable physical GPU device was found");
 
 	// Create the logical device, with our specified features
+	vk::PhysicalDeviceVulkan14Features features_14 = {
+		.maintenance5 = true,
+	};
 	vk::PhysicalDeviceVulkan13Features features_13 = {
+		.pNext = &features_14,
 		.synchronization2 = true,
 		.dynamicRendering = true,
 	};
@@ -199,4 +225,257 @@ void start(int fd) {
 		},
 	};
 	auto image_view = device.createImageView(image_view_info);
+
+	// Create shaders
+	auto vert_spirv = read_spirv("shader.vert");
+	auto frag_spirv = read_spirv("shader.frag");
+
+	vk::ShaderModuleCreateInfo vert_shader_info = {
+		.codeSize = vert_spirv.size() * sizeof(std::uint32_t),
+		.pCode = vert_spirv.data()};
+	vk::ShaderModuleCreateInfo frag_shader_info = {
+		.codeSize = frag_spirv.size() * sizeof(std::uint32_t),
+		.pCode = frag_spirv.data()};
+
+	// Generally just need vertex + fragment shader here, but we could have stuff like tesselation too (subdividing triangles)
+	std::array shader_stages = {
+		vk::PipelineShaderStageCreateInfo {
+			// We enabled the maintainence5 feature, so we can put info in pNext here, and the pipeline
+			// will create the module for us (hence why we *dont* set the module field here)
+			.pNext = &vert_shader_info,
+			.stage = vk::ShaderStageFlagBits::eVertex,
+			.pName = "main", // name of the primary function entry point, so main()
+		},
+		vk::PipelineShaderStageCreateInfo {
+			.pNext = &frag_shader_info,
+			.stage = vk::ShaderStageFlagBits::eFragment,
+			.pName = "main",
+		},
+	};
+
+	// We have no vertex input, it's built into the shader
+	vk::PipelineVertexInputStateCreateInfo vertex_input_info = {};
+	// How to interpret the vertices
+	vk::PipelineInputAssemblyStateCreateInfo input_assembly_info = {
+		// Every 3 verts is a separate triangle
+		.topology = vk::PrimitiveTopology::eTriangleList,
+	};
+
+	// A viewport is essentially another "image view" into the image view, where we can specify what section of the image_view we want
+	// We can have multiple viewports for one image view, and the shader can choose what image_view it renders into. That viewport will be
+	// normalised to the regular -1 to 1 co-ordinate range. Scissors control the max bounds on the fragments to be rendered out, essentially,
+	// on the x and y
+	vk::PipelineViewportStateCreateInfo viewport_state_info = {
+		.viewportCount = 1,
+		.scissorCount = 1,
+	};
+
+	// We don't set  the exact scissor or viewport dimensions now, we do that at cmd buffer time
+	constexpr std::array dynamic_states = {
+		vk::DynamicState::eViewport,
+		vk::DynamicState::eScissor,
+	};
+
+	// NOTE: The count is just the number of dynamic_states, so it can look through the array and
+	// see we're using dynamic_x (ie. not setting it during pipeline creation). This is NOT the same
+	// as viewport_state_info, like if we had another dynamic state, we'd add that to dynamic_states
+	// For example, we could add if we want to cull back-faces (ie. inverted normals) or not as a dynamic property
+	vk::PipelineDynamicStateCreateInfo dynamic_state_info = {
+		.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size()),
+		.pDynamicStates = dynamic_states.data(),
+	};
+
+	vk::PipelineMultisampleStateCreateInfo multisample_info = {
+		// Only one sample (no msaa)
+		.rasterizationSamples = vk::SampleCountFlagBits::e1,
+	};
+
+	// Runs on every fragment shader, when it outputs to the colour attachment
+	vk::PipelineColorBlendAttachmentState colour_blend_attachment = {
+		// Specify that it can write these colour channels (by default, it can't write any channels,
+		// so it will do nothing)
+		.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+	};
+
+	// We may have multiple blend attachments, in the case we have multiple colour (or image generally) attachments
+	// They will match up by index (eg blend[1] matches colour[1]). We only have one.
+	vk::PipelineColorBlendStateCreateInfo colour_blend_info = {
+		.attachmentCount = 1,
+		.pAttachments = &colour_blend_attachment,
+	};
+
+	// This would usually specify what push constants / descriptor sets ranges, but we have none
+	auto pipeline_layout = device.createPipelineLayout(vk::PipelineLayoutCreateInfo {});
+
+	// Specify the formats of the colour attachments we will add
+	vk::PipelineRenderingCreateInfo pipeline_rendering_info = {
+		.colorAttachmentCount = 1,
+		.pColorAttachmentFormats = &image_format,
+	};
+
+	// How to rasterize the traingles
+	vk::PipelineRasterizationStateCreateInfo rasterisation_info = {
+		// It defaults to filling the triangle (we could set it to draw the lines, or draw the vertices instead)
+		// I've explicitly put it here to be obvious
+		.polygonMode = vk::PolygonMode::eFill,
+		// We don't draw lines, but the spec mandates it to be set to 1.0 if we don't enable the widelines feature
+		// which contrary to its name, just means setting linewidth to a size other than 1.0
+		// "wideLines specifies whether lines with width other than 1.0 are supported. If this feature is not enabled,
+		// the lineWidth member of the VkPipelineRasterizationStateCreateInfo structure must be 1."
+		.lineWidth = 1.0f,
+	};
+
+	/*  After running vkCmdDraw(image to render to), this is what the pipeline does (i.e. the pipeline stages), in order:
+	 *
+	 *  Input Assembler: Combines vertices inputted into primitives, such as triangles (or, strip triangles, etc)
+	 *  Vertex Shader: Runs on every vertex, transforming its position.
+	 *  (Optionally, tesselation shaders, etc run here)
+	 *  Clip Volume: Clips primitives which fall outside of the region (new vertices can be generated, to 'cut' in half / clip it)
+	 *  Viewport transformation: Map clip-space co-ordinates to the image space, ie. converts to actual pixel space (so -1, 1, becomes 1920x1080)
+	 *  Rasterisation: Fragments are now produced (a fragment is basically a "potential pixel"). It also calculates depth of each fragment
+	 *  Scissor test: Reject fragments outside of the scissor
+	 *  Depth test: Reject fragments which cannot be seen
+	 *  Fragment Shader: The fragment shader runs, and outputs a single vec4 per attached colour attachment
+	 *  Colour Attachment Output stage: Applies blending of the fragments, and writes the result to the image.
+	 */
+	auto graphics_pipeline = device.createGraphicsPipeline(
+		nullptr, // Optional cache to specify, otherwise shaders will need to be re-compiled, etc
+		vk::GraphicsPipelineCreateInfo {
+			.pNext = &pipeline_rendering_info, // It's in pnext, because this is a dynamic rendering extension
+			.stageCount = shader_stages.size(),
+			.pStages = shader_stages.data(),
+			.pVertexInputState = &vertex_input_info,
+			.pInputAssemblyState = &input_assembly_info,
+			.pViewportState = &viewport_state_info,
+			.pRasterizationState = &rasterisation_info,
+			.pMultisampleState = &multisample_info,
+			.pColorBlendState = &colour_blend_info,
+			.pDynamicState = &dynamic_state_info,
+			.layout = pipeline_layout,
+		});
+
+	// Command buffers
+	vk::CommandPoolCreateInfo command_pool_info = {
+		// the buffers won't live for a long time, hint to the driver
+		.flags = vk::CommandPoolCreateFlagBits::eTransient,
+		.queueFamilyIndex = queue_family_index,
+	};
+	auto command_pool = device.createCommandPool(command_pool_info);
+	vk::CommandBufferAllocateInfo command_buffer_allocate_info = {
+		.commandPool = *command_pool,
+		// Primary buffers can be submitted directly to the queue
+		// the other option is a secondary buffer, which is in turn submitted to the primary buffer
+		.level = vk::CommandBufferLevel::ePrimary,
+		.commandBufferCount = 1,
+	};
+	auto command_buffers = vk::raii::CommandBuffers(device, command_buffer_allocate_info);
+	auto command_buffer = std::move(command_buffers.front());
+
+	// Command buffers are the 'unit of work' on the gpu. When we are recording stuff into it, we're mainly setting metadata,
+	// only command buffers start in queue order between themselves, not stuff that was recorded within them.
+	command_buffer.begin(vk::CommandBufferBeginInfo {
+		.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+	});
+
+	// There is no point of me explaining what a memory barrier is, I would do worse, than how elegantly this video does: https://youtu.be/GiKbGWI4M-Y?t=2046
+	// Trust me, watch it
+	// The layout just means the previous layout in memory we had, and the new layout means the new one we hint for it to take. This is because, the GPU
+	// may have one layout more efficient for reading, another for writing etc. The subresource range just specifies what miplevels/arraylayers we're transitioning
+	// in the image - the entire image needn't be transitioned.
+	vk::ImageMemoryBarrier2 image_barrier = {
+		.srcStageMask = vk::PipelineStageFlagBits2::eNone,
+		.srcAccessMask = vk::AccessFlagBits2::eNone,
+		.dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		.dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+		.oldLayout = vk::ImageLayout::eUndefined,
+		.newLayout = vk::ImageLayout::eAttachmentOptimal,
+		.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+		.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+		.image = *image,
+		.subresourceRange = {
+			.aspectMask = vk::ImageAspectFlagBits::eColor,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
+
+	// We didn't record anything before this, so it's not actually really doing anything other than ensuring we can write during the colour attachment output stage
+	command_buffer.pipelineBarrier2(vk::DependencyInfo {
+		.imageMemoryBarrierCount = 1,
+		.pImageMemoryBarriers = &image_barrier,
+	});
+
+	// Colour output attachment info
+	vk::RenderingAttachmentInfo colour_attachment_info = {
+		.imageView = *image_view,
+		// What layout the image is in, at the colour attachment stage
+		// It does not do the transition, the memory barrier did that
+		.imageLayout = vk::ImageLayout::eAttachmentOptimal,
+		// Clear the image (within the render area, we set just below) with the clear colour on load, before draw
+		.loadOp = vk::AttachmentLoadOp::eClear,
+		// Keep the contents after rendering is done (we could set it to eDontCare, if it doesn't need to be valid)
+		.storeOp = vk::AttachmentStoreOp::eStore,
+		.clearValue = vk::ClearColorValue {
+			std::array {
+				0.5f,
+				0.5f,
+				0.5f,
+				0.1f,
+			}}};
+
+	vk::Extent2D extent = {
+		.width = 1080, .height = 1080};
+
+	vk::RenderingInfo rendering_info = {
+		.renderArea = {.offset = {
+						   .x = 0,
+						   .y = 0,
+					   },
+			.extent = extent},
+		// What layers the shader has access to (shaders default to the first layer)
+		.layerCount = 1,
+		.colorAttachmentCount = 1,
+		.pColorAttachments = &colour_attachment_info,
+	};
+
+	// Unlike the name suggests, it just specifies the colour attachment - it doesn't actually 'render' into it here
+	command_buffer.beginRendering(rendering_info);
+	// This is a graphics pipeline, we could have stuff like compute pipelines instead
+	command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline);
+
+	command_buffer.setViewport(0,
+		vk::Viewport {
+			.x = 0.0f,
+			.y = 0.0f,
+			.width = 1080.0f,
+			.height = 1080.0f,
+			.minDepth = 1.0f,
+			.maxDepth = 1.0f,
+		});
+
+	command_buffer.setScissor(0,
+		vk::Rect2D {
+			.offset = {
+				.x = 0,
+				.y = 0,
+			},
+			.extent = extent});
+
+	command_buffer.draw(3, 1, 0, 0);
+
+	command_buffer.endRendering();
+	command_buffer.end();
+
+	vk::CommandBufferSubmitInfo submit_info = {
+		.commandBuffer = command_buffer,
+	};
+
+	queue.submit2(vk::SubmitInfo2 {
+		.commandBufferInfoCount = 1,
+		.pCommandBufferInfos = &submit_info,
+	});
+
+    queue.waitIdle();
 }
