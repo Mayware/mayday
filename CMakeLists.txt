@@ -10,12 +10,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 project(mayday)
 add_executable(mayday)
 
-#> PkgConfig - LibDrm, LibSeat
+#> PkgConfig - LibDrm, LibSeat, LibUdev
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
 target_link_libraries(mayday PRIVATE PkgConfig::LIBDRM)
 pkg_check_modules(LIBSEAT REQUIRED IMPORTED_TARGET libseat)
 target_link_libraries(mayday PRIVATE PkgConfig::LIBSEAT)
+pkg_check_modules(UDEV REQUIRED IMPORTED_TARGET libudev)
+target_link_libraries(mayday PRIVATE PkgConfig::UDEV)
 
 #> Vulkan (build the module)
 find_package(Vulkan REQUIRED)

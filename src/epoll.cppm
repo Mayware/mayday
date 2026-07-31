@@ -29,7 +29,8 @@ export class Epoll {
 			.data = epoll_data_t {
 				.u32 = id,
 			}};
-		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event); // will copy event
+		if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1) // will copy event
+			MQ_XERRNO("Failed to add fd {}, id {}, to epoll", fd, id);
 	}
 
 	std::span<epoll_event> yield() {
@@ -42,9 +43,9 @@ export class Epoll {
   private:
 	EPOLL_EVENTS get_interest(Interest interest, std::source_location source = std::source_location::current()) {
 		switch (interest) {
-            case Interest::Readable:
+		case Interest::Readable:
 			return EPOLLIN;
-            case Interest::Writable:
+		case Interest::Writable:
 			return EPOLLOUT;
 		default:
 			MQ_SXERROR(source, "Invalid interest provided");
