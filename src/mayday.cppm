@@ -24,20 +24,40 @@ struct Udev {
 	int watch_fd;
 };
 
-struct Frame {
-	vk::raii::CommandBuffer cmd_buffer;
-	std::uint32_t semaphore_value;
+struct VkFrame {
+	vk::raii::CommandBuffer command_buffer;
+	vk::raii::DeviceMemory memory;
 	vk::raii::Image image;
 	vk::raii::ImageView image_view;
+	vk::DrmFormatModifierProperties2EXT drm_modifier;
+	std::vector<vk::SubresourceLayout> memory_planes_layouts;
+	int dmabuf_fd; // We create the image in vulkan, but get an FD to it, so DRM can import that image as a GEM buffer
+};
+
+struct Frame {
+	vk::raii::CommandBuffer command_buffer;
+	std::uint32_t semaphore_value;
 	vk::raii::DeviceMemory memory;
+	vk::raii::Image image;
+	vk::raii::ImageView image_view;
+	vk::DrmFormatModifierProperties2EXT drm_modifier;
+	std::vector<vk::SubresourceLayout> memory_planes_layouts;
+
+	std::uint32_t framebuffer_handle;
+};
+
+struct VkMonitor {
+	vk::raii::CommandPool command_pool;
+	std::vector<VkFrame> frames;
 };
 
 struct Monitor {
-    std::uint32_t connector_handle;
-    std::uint32_t crtc_handle;
-    std::uint32_t plane_handle;
-    drmModeModeInfo mode;
-	vk::raii::CommandPool cmd_pool;
+	std::uint32_t connector_handle;
+    std::uint32_t encoder_handle;
+	std::uint32_t crtc_handle;
+	std::uint32_t plane_handle;
+	drmModeModeInfo mode;
+	vk::raii::CommandPool command_pool;
 	std::vector<Frame> frames;
 };
 
@@ -46,9 +66,11 @@ struct Render {
 	vk::raii::Instance instance;
 	vk::raii::PhysicalDevice physical_device;
 	vk::raii::Device device;
+	std::uint32_t queue_family_index;
 	vk::raii::Queue queue;
 	vk::raii::Pipeline graphics_pipeline;
 	vk::raii::Semaphore semaphore;
+	std::vector<vk::DrmFormatModifierProperties2EXT> supported_drm_modifiers;
 };
 
 void enable_seat(libseat* libseat, void* user_data) {
@@ -70,11 +92,12 @@ export class Mayday {
 	/* Vulkan shit */
 	// Gets the vulkan "objects"
 	Render get_shit();
+	VkMonitor get_vk_monitor(std::uint32_t width, std::uint32_t height, std::uint32_t frame_count);
 
+  public:
 	/* Mainly drm shit */
 	void regenerate_monitors();
 
-  public:
 	Seat seat;
 	Udev udevd;
 	mayquill::Server server;
@@ -141,6 +164,8 @@ export class Mayday {
 		// This isn't enabled by default for legacy programs not using the API
 		if (drmSetClientCap(seat.device_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1))
 			MQ_XERRNO("Failed to enable universal planes");
+
+		regenerate_monitors();
 
 		server.bind_socket();
 	}

@@ -24,19 +24,19 @@ int main() {
 			}
 			// Udev watch fd
 			case 1: {
-				// We'll probably receive multiple events
+				bool needs_regen = false;
 				// Essentially, recv
 				while (udev_device* event = udev_monitor_receive_device(mayday.udevd.watch)) {
 					if (!event)
 						continue;
-					auto action = udev_device_get_action(event);
-					// Final component of the /sys path
-					auto sysname = udev_device_get_sysname(event);
 					auto hotplug = udev_device_get_property_value(event, "HOTPLUG");
 
-					if (hotplug && std::string_view(action) == "change" && std::string_view(hotplug) == "1") {
+					if (hotplug && std::string_view(hotplug) == "1") {
+						needs_regen = true;
 					}
 				}
+				if (needs_regen)
+					mayday.regenerate_monitors();
 				break;
 			}
 			}

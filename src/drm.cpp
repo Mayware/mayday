@@ -17,8 +17,9 @@ import std;
  *  Framebuffer -> Plane -> CRTC -> Encoder -> Connector
  *
  *  Framebuffer: A container for the real backing memory(ies). It interprets the format, etc
- *  Plane: Specifies the cropping / scaling / rotation of the framebuffer.
+ *  Plane: Specifies the cropping / scaling / rotation of the framebuffer, attached to it.
  *         It also can specify the blending of the previous content in the CRTC.
+ *         Eg. the primary plane, overlay planes etc.
  *         Please note that memory planes are a different concept.
  *  CRTC: The overall display pipeline, it receives pixel data from the plane(s) and blends them together
  *        It sets the refresh rate / timing, etc. It continuously scans out the framebuffer, so if you
@@ -32,6 +33,8 @@ import std;
  *  Note, each one of the objects above has a handle/id that is used to reference them. A key pointing to the actual struct.
  *  I will call the actual instantiated struct, an object, and the key, a handle.
  */
+
+constexpr std::uint32_t frame_count = 2;
 
 // Please see the 2 wrapper functions below for an explanation, this function returns both the <handle, value>
 std::optional<std::pair<std::uint64_t, std::uint64_t>> get_property(int fd, std::int32_t handle, std::uint32_t object_type, std::string_view property_name) {
@@ -78,11 +81,13 @@ auto get_property_handle(int fd, std::int32_t handle, std::uint32_t object_type,
 
 struct DrmMonitor {
 	std::uint32_t connector_handle;
+	std::uint32_t encoder_handle;
 	std::uint32_t crtc_handle;
 	std::uint32_t plane_handle;
 	drmModeModeInfo mode;
 };
 
+// This is an explicit no-op, if the monitors aren't actually different to what the connector scan on the device_fd shows. Only changed monitors are regenerated
 void Mayday::regenerate_monitors() {
 	std::vector<DrmMonitor> viable_monitors;
 	std::vector<drmModeConnector*> viable_connectors;
@@ -94,11 +99,13 @@ void Mayday::regenerate_monitors() {
 	drmModeRes* resources = drmModeGetResources(seat.device_fd);
 	if (!resources)
 		MQ_XERRNO("Failed to get resources");
+	DEFER([resources]() { drmModeFreeResources(resources); });
 
 	// Same, but for planes
 	drmModePlaneRes* plane_resources = drmModeGetPlaneResources(seat.device_fd);
 	if (!plane_resources)
 		MQ_XERRNO("Failed to get plane resources");
+	DEFER([plane_resources]() { drmModeFreePlaneResources(plane_resources); });
 
 	for (int i = 0; i < resources->count_connectors; ++i) {
 		drmModeConnector* connector = drmModeGetConnector(seat.device_fd, resources->connectors[i]);
@@ -109,27 +116,46 @@ void Mayday::regenerate_monitors() {
 		// (The mode is refresh rate, resolution, etc)
 		if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
 			viable_connectors.push_back(connector);
-			break;
 		} else {
 			drmModeFreeConnector(connector);
 		}
 	}
 
 	for (auto connector : viable_connectors) {
+		DEFER([connector]() { drmModeFreeConnector(connector); });
 		auto mode = connector->modes[0];
 
+		// We pick encoders, planes and CRTCs, ensuring we haven't used them in a previous loop (ie. each viable monitor has a unique encoder, plane and CRTC)
+		// Currently, each viable connector just picks the first encoder plane and crtc that works with it. It could potentially be that this connector works with
+		// multiple of X, but another one doesn't, so we should let that other connector have it but I cba implementing that
+
+		std::uint32_t encoder_handle;
+		std::uint32_t crtc_handle;	  // Recall that the handle is the actual id, whereas the index is just the position in the array it was in
 		std::int32_t crtc_index = -1; // There can be a max of 32 CRTCs specified by the possible_crtcs bitmask, so the range is fine
 		for (int i = 0; i < connector->count_encoders && crtc_index == -1; ++i) {
-			drmModeEncoder* encoder = drmModeGetEncoder(seat.seat_fd, connector->encoders[i]);
+			drmModeEncoder* encoder = drmModeGetEncoder(seat.device_fd, connector->encoders[i]);
 			if (!encoder)
 				continue;
 			DEFER([encoder]() { drmModeFreeEncoder(encoder); });
+			// Check if we aren't already using this encoder, for another viable_monitor
+			bool already_used = std::ranges::any_of(viable_monitors, [handle = encoder->encoder_id](const auto& monitor) { return monitor.encoder_handle == handle; });
+			if (already_used)
+				continue;
+
 			for (int j = 0; j < resources->count_crtcs; ++j) {
+				std::uint32_t handle = resources->crtcs[j];
+				// Ensure this crtc isn't already used
+				bool already_used = std::ranges::any_of(viable_monitors, [handle](const auto& monitor) { return monitor.crtc_handle == handle; });
+				if (already_used)
+					continue;
+
 				// possible_crtcs is a bitmask, mapping to resources->crtcs[bit]
 				// Eg. 1011 would mean that the 1st, 3rd and 4th CRTCs are useable
 				// 1 << j just means take 1, then shift it leftwards J times.
 				// Anding this with possible_crtcs, will give some number, or 0
 				if (encoder->possible_crtcs & (std::uint32_t {1} << j)) {
+					encoder_handle = encoder->encoder_id;
+					crtc_handle = handle;
 					crtc_index = j;
 				}
 			}
@@ -139,14 +165,18 @@ void Mayday::regenerate_monitors() {
 
 		std::uint32_t plane_handle = 0; // handles cannot be 0. Only the handle is later needed, hence why we don't store the full object
 		for (int i = 0; i < plane_resources->count_planes; ++i) {
-			drmModePlane* plane = drmModeGetPlane(seat.seat_fd, plane_resources->planes[i]);
+			drmModePlane* plane = drmModeGetPlane(seat.device_fd, plane_resources->planes[i]);
 			if (!plane)
 				continue;
 			DEFER([plane]() { drmModeFreePlane(plane); });
+			// Ensure this plane isn't already used
+			bool already_used = std::ranges::any_of(viable_monitors, [handle = plane->plane_id](const auto& monitor) { return monitor.plane_handle == handle; });
+			if (already_used)
+				continue;
 			// Same trick, as with the CRTCs
 			if (plane->possible_crtcs & (std::uint32_t {1} << crtc_index)) {
 				// Type is a property value, because it's an additional cap from atomic
-				auto type = get_property_value(seat.seat_fd, plane_resources->planes[i], DRM_MODE_OBJECT_PLANE, "type");
+				auto type = get_property_value(seat.device_fd, plane_resources->planes[i], DRM_MODE_OBJECT_PLANE, "type");
 				if (type == DRM_PLANE_TYPE_PRIMARY)
 					plane_handle = plane->plane_id;
 			}
@@ -155,31 +185,53 @@ void Mayday::regenerate_monitors() {
 			MQ_XERROR("Failed to find primary plane");
 
 		std::uint32_t connector_handle = connector->connector_id;
-		std::uint32_t crtc_handle = resources->crtcs[crtc_index];
 
 		viable_monitors.push_back(DrmMonitor {
 			.connector_handle = connector_handle,
+			.encoder_handle = encoder_handle,
 			.crtc_handle = crtc_handle,
 			.plane_handle = plane_handle,
 			.mode = mode,
 		});
-
-		drmModeFreeConnector(connector);
 	}
 
+	// Atomic commit set up. We just want one big atomic commit so state swaps can happen. Eg, connecter A uses CRTC B now and connector B uses CRTC A now, so they can just swap,
+	// whereas if it was multiple commits then there'd be a point where they'd assigned the same CRTC. We also use this commit to disable old CRTCs etc that we no longer use,
+	// for destroyed monitors, or ones that changed to use a different one
+	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
+	if (!atomic_request)
+		MQ_XERROR("Failed to allocate atomic request");
+	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
+
+	// Check if current monitors match viable monitors. This pass removes monitors that don't have a match in viable_monitors, or differ to their matching
+	// viable_monitor in a meaningful way
 	for (int i = 0; i < monitors.size();) {
 		auto& monitor = monitors[i];
+		bool avadakedavra = false; // To do do a full teardown (ie. also zero out fields)
+		bool dirty = false;		   // To do a partial teardown
+
 		// Check if the monitor still exists
 		auto viable_monitor = std::find_if(viable_monitors.begin(), viable_monitors.end(), [&monitor](auto& viable_monitor) {
 			return monitor.connector_handle == viable_monitor.connector_handle;
 		});
 		if (viable_monitor == viable_monitors.end()) {
-			goto destroy;
+			avadakedavra = true;
+			dirty = true;
 		}
 
-		// Check the CRTC and the plane handles are the same
-		if (monitor.connector_handle != (*viable_monitor).connector_handle || monitor.plane_handle != (*viable_monitor).plane_handle) {
-			goto destroy;
+		if (monitor.crtc_handle != (*viable_monitor).crtc_handle) {
+			drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
+			dirty = true;
+		}
+		if (monitor.encoder_handle != (*viable_monitor).encoder_handle) {
+			dirty = true;
+		}
+		if (monitor.plane_handle != (*viable_monitor).plane_handle) {
+			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+			dirty = true;
 		}
 
 		// Compare all mode fields (that aren't just derived from others)
@@ -197,338 +249,139 @@ void Mayday::regenerate_monitors() {
 			monitor.mode.vrefresh != viable_monitor->mode.vrefresh ||
 			monitor.mode.flags != viable_monitor->mode.flags ||
 			monitor.mode.type != viable_monitor->mode.type) {
-			goto destroy;
+			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
+			dirty = true;
 		}
 
-		++i;
-		viable_monitors.erase(viable_monitor); // We already have it, and it's the same
-		continue;
-	destroy:
-		monitors.erase(monitors.begin() + i);
+		// Monitor is fine
+		if (!(dirty || avadakedavra)) {
+			++i;
+			viable_monitors.erase(viable_monitor); // We already have it, and it's the same
+			continue;
+		}
+
+		if (avadakedavra) {
+			// This label clears ALL the atomic properties, rather than the fine-grained ones above
+			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
+			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
+		}
+		if (dirty) {
+			monitors.erase(monitors.begin() + i);
+		}
 	}
 
 	// Create any monitors which weren't found to exist
+	// We first fork out to get_vk_monitor to create the vulkan backing components of images, memory etc, which we then import into DRM as the backing memory
+	// The vulkan structs VkFrame, VkMonitor are counterparts to Frame and Monitor and exist solely for the return type of get_vk_monitor
+	std::vector<Monitor> new_monitors;
 	for (auto& monitor : viable_monitors) {
-        auto connector = drmModeGetConnector(seat.device_fd, monitor.connector_handle);
+		// Get (create) the vulkan components of the monitor
+		auto vk_monitor = get_vk_monitor(monitor.mode.hdisplay, monitor.mode.vdisplay, frame_count);
 
-		drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
-		if (!atomic_request)
-			MQ_XERROR("Failed to allocate atomic request");
-		DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
-		// drmModeAtomicAddProperty takes atomic_request, object_id (object handle), property_id (property handle), property value
+		std::vector<Frame> frames;
+		// Import the VKFrames into DRM, give them GEM handles and register them as DRM framebuffers
+		for (auto& vk_frame : vk_monitor.frames) {
+			// We won't need the dmabuf_fd, after we import it into the GEM handle
+			DEFER([fd = vk_frame.dmabuf_fd]() { close(fd); });
+			std::uint32_t gem_handle;
+			if (drmPrimeFDToHandle(seat.device_fd, vk_frame.dmabuf_fd, &gem_handle) < 0)
+				MQ_XERRNO("Failed to import dmabuf into monitor");
+			// We won't need the GEM handle after we get the framebuffer handle (using the GEM handle to get that, in the first place)
+			DEFER([fd = seat.device_fd, handle = gem_handle]() { drmCloseBufferHandle(fd, handle); });
 
+			// DRM/KMS supports a maximum of 4 memory planes; colour formats generally don't need any more than this
+			// For example, YCbCr(YUV) could have 2 planes, 1 for the brightness (Y), and 1 for the (Cb[blue-ness], Cr[red-ness])
+			// Even with modifiers, it doesn't tell us the full memory layout, see: https://docs.kernel.org/userspace-api/dma-buf-alloc-exchange.html#dimensions-and-size
+			// We still need the pitch (synonym of stride) and offset (obviously offset). A 1000x1000 image may be allocated like it is infact 1024x1000 for aligned access
+			// patterns, and hence,we still need to know pitch
+			std::uint64_t modifiers[4] = {};
+			std::uint32_t handles[4] = {}, pitches[4] = {}, offsets[4] = {};
+			for (int i = 0; i < vk_frame.memory_planes_layouts.size(); ++i) {
+				auto& layout = vk_frame.memory_planes_layouts[i];
+				modifiers[i] = vk_frame.drm_modifier.drmFormatModifier;
+				handles[i] = gem_handle;
+				pitches[i] = layout.rowPitch;
+				offsets[i] = layout.offset;
+			}
+			std::uint32_t framebuffer_handle;
+			if (drmModeAddFB2WithModifiers(seat.device_fd, monitor.mode.hdisplay, monitor.mode.vdisplay, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifiers, &framebuffer_handle, DRM_MODE_FB_MODIFIERS))
+				MQ_XERRNO("Failed to create framebuffer");
+
+			frames.push_back(Frame {
+				.command_buffer = std::move(vk_frame.command_buffer),
+				.memory = std::move(vk_frame.memory),
+				.image = std::move(vk_frame.image),
+				.image_view = std::move(vk_frame.image_view),
+				.drm_modifier = std::move(vk_frame.drm_modifier),
+				.memory_planes_layouts = std::move(vk_frame.memory_planes_layouts),
+
+				.framebuffer_handle = framebuffer_handle,
+			});
+		}
+
+		new_monitors.push_back(Monitor {
+			.connector_handle = std::move(monitor.connector_handle),
+			.encoder_handle = std::move(monitor.encoder_handle),
+			.crtc_handle = std::move(monitor.crtc_handle),
+			.plane_handle = std::move(monitor.plane_handle),
+			.mode = std::move(monitor.mode),
+			.command_pool = std::move(vk_monitor.command_pool),
+			.frames = std::move(frames),
+		});
+	}
+
+	// Modeset all new monitors
+	// drmModeAtomicAddProperty takes atomic_request, object_id (object handle), property_id (property handle), property value
+	std::vector<std::uint32_t> mode_blob_handles;
+	DEFER([fd = seat.device_fd, &mode_blob_handles]() {
+		// Clean up the modes we allocated in the loop
+		for (auto handle : mode_blob_handles) {
+			drmModeDestroyPropertyBlob(fd, handle);
+		}
+	});
+	for (auto& monitor : new_monitors) {
 		// Set the chosen CRTC that drives this connector
-		drmModeAtomicAddProperty(atomic_request, connector->connector_id, *get_property_handle(seat.seat_fd, connector->connector_id, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), monitor.crtc_handle);
+		drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), monitor.crtc_handle);
 		// Set the CRTC to be active (actually scanning out data)
-		drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.seat_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 1);
+		drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 1);
 		// Set the mode the CRTC is operating with (eg. refresh, res, etc). We're choosing the 0th mode arbitrarily
 		// The connector->modes[] array is NOT an array of the mode handles. Modes do not have handles, they are infact just directly stored (as drmModeModeInfo)
 		// in the array as their values. Hence, there is no handle value to pass as an integer to atomic add property, as the mode is directly the value.
 		// Therefore, we use drmModeCreatePropertyBlob to upload the mode struct to the kernel, which will then give us an id/handle to use to refer to it.
 		std::uint32_t mode_blob_handle;
-		if (drmModeCreatePropertyBlob(seat.seat_fd, &monitor.mode, sizeof(monitor.mode), &mode_blob_handle))
+		if (drmModeCreatePropertyBlob(seat.device_fd, &monitor.mode, sizeof(monitor.mode), &mode_blob_handle))
 			MQ_XERRNO("Failed to create mode property blob");
-		// DEFER([seat.seat_fd, mode_blob_handle]() { drmModeDestroyPropertyBlob(fd, mode_blob_handle); });
-		drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.seat_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
-
-		// Create the graphics-execution-manager (GEM) buffer on the GPU (or CPU if needs be)
-		// This is nothing more than a pool of memory - a buffer can hold multiple memory planes for example
-		drm_mode_create_dumb create_request = {
-			.height = mode.vdisplay,
-			.width = mode.hdisplay,
-			.bpp = 32 // 32 bits per pixel, or 4 bytes. It's in bits for formats like 1bpp, where it's just on or off pixels
-		};
-		// Will assign the buffer for us on the kernel side, and set its handle to create_request.handle
-		// Will also fill in other additional fields. The pitch only works for *linear* formats, hence why it is a dumb buffer.
-		if (drmIoctl(seat.seat_fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_request) < 0)
-			MQ_XERRNO("Failed to create GEM buffer");
-		// DEFER([fd, &create_request]() {
-		// drm_mode_destroy_dumb destroy_request = {.handle = create_request.handle};
-		// drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_request);
-		// });
-
-		struct {
-			std::uint32_t framebuffer_handle, buffer_handle, pitch, width, height;
-			std::uint64_t size;
-			std::byte* map_start;
-		} framebuffer = {
-			.buffer_handle = create_request.handle,
-			.pitch = create_request.pitch, // Bytes from start of one pixel row to the next. May be more than width * (bpp/8), because of padding, if the driver requires it
-			.width = mode.hdisplay,
-			.height = mode.vdisplay,
-			.size = create_request.size,
-		};
-
-		// DRM/KMS supports a maximum of 4 memory planes; colour formats generally don't need any more than this
-		// XRGB888 only uses 1 plane, but see https://www.youtube.com/watch?v=3dET-EoIMM8 to see how other formats use multiple.
-		// For example, YCbCr(YUV) could have 2 planes, 1 for the brightness (Y), and 1 for the (Cb[blue-ness], Cr[red-ness])
-		// Multiple planes can be stored in one GEM buffer, hence the offset to say where each plane starts.
-		// We only need to supply the width+height once to the addFB2, because the format can work it out for the rest of the planes
-		// (eg. with nv12, the width/height of the 2nd plane is halved). However, we must supply pitch per-plane because we could
-		// pack multiple memory planes into one GEM buffer (hence the offset, if we do), but then it's on us to ensure it's padded
-		// to the correct byte boundaries, which means that the pitch cannot be solely derived from the main plane's pitch
-		// (only the minimum pitch could be)
-		std::uint32_t handles[4] = {}, pitches[4] = {}, offsets[4] = {};
-		handles[0] = framebuffer.buffer_handle;
-		pitches[0] = framebuffer.pitch;
-		offsets[0] = 0;
-		if (drmModeAddFB2(fd, framebuffer.width, framebuffer.height, DRM_FORMAT_XRGB8888, handles, pitches, offsets, &framebuffer.framebuffer_handle, 0))
-			MQ_XERRNO("Failed to create framebuffer");
-		DEFER([fd, &framebuffer]() { drmModeRmFB(fd, framebuffer.framebuffer_handle); });
-
-		// Map the buffer, so we can write to it. Since the one fd can have many mmappable buffers
-		// this ioctl gives us the offset for the GEM buffer we just made;
-		drm_mode_map_dumb map_request = {.handle = framebuffer.buffer_handle};
-		if (drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map_request) < 0)
-			MQ_XERRNO("Failed to map buffer (drm)");
-		framebuffer.map_start = static_cast<std::byte*>(mmap(0, framebuffer.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, map_request.offset));
-		if (framebuffer.map_start == MAP_FAILED)
-			MQ_XERRNO("Failed to map buffer (mmap)");
-		DEFER([&framebuffer]() { munmap(framebuffer.map_start, framebuffer.size); });
-
-		for (std::uint32_t row = 0; row < framebuffer.height; ++row) {
-			auto start = framebuffer.map_start + row * framebuffer.pitch;
-			for (std::uint32_t column = 0; column < framebuffer.width; ++column) {
-				*reinterpret_cast<std::uint32_t*>(start + column * 4) = 0x12345678;
-			}
-		}
-
+		mode_blob_handles.push_back(mode_blob_handle);
+		drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
 		// Assign the frame buffer to the plane
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), framebuffer.framebuffer_handle);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), monitor.frames[0].framebuffer_handle);
 		// Tell the plane about the CRTC it feeds into. We do it on the planes end because a plane can only link to one CRTC, where as a CRTC may link to many planes
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), crtc_handle);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), monitor.crtc_handle);
 		// The SRC_ values use 16whole.16decimal numbers (ie. decimal point half way through in 32 bit number)
 		// This is done to allow fractional co-ordinates, in cases where the SRC_size is smaller than the CRTC_output_size (hence you can still refer to pixels on the CRTC)
 		// X position of where to start reading inside the framebuffer
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_X"), 0 << 16);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_X"), 0 << 16);
 		// Y position of where to start reading inside the framebuffer
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_Y"), 0 << 16);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_Y"), 0 << 16);
 		// How many x pixels to read (width) from the framebuffer
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_W"), framebuffer.width << 16);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_W"), monitor.mode.hdisplay << 16);
 		// How many y pixels to read (height, downwards) from the framebuffer
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_H"), framebuffer.height << 16);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_H"), monitor.mode.vdisplay << 16);
 		// The output co-ordinates of where to put that sampled plane onto the CRTC
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_X"), 0);
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), framebuffer.width);
-		drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), framebuffer.height);
-
-		if (drmModeAtomicCommit(fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
-			MQ_XERRNO("Failed attomic commit");
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_X"), 0);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), monitor.mode.hdisplay);
+		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), monitor.mode.vdisplay);
 	}
+	// LET IT RIPPPPP!
+	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
+		MQ_XERRNO("Failed attomic commit");
+
+	// New monitors are completely initialised now (God willing)
+	// std::move on a vector only marks the vector itself as an rvalue, getting a .begin() still gives T&
+	// std::vieww::as_rvalues also makes the it's rvalues too, so it does move the contents
+	monitors.append_range(new_monitors | std::views::as_rvalue);
 }
-
-// export void start() {
-// 	App app = {};
-// 	libseat_seat_listener listener = {
-// 		.enable_seat = enable_seat,
-// 		.disable_seat = disable_seat,
-// 	};
-// 	app.seat = libseat_open_seat(&listener, &app);
-// 	if (!app.seat)
-// 		MQ_XERRNO("Failed to open seat");
-// 	DEFER([&app]() { libseat_close_seat(app.seat); });
-
-// 	while (!app.active) {
-// 		if (libseat_dispatch(app.seat, -1) == -1)
-// 			MQ_XERRNO("Failed to dispatch libseat");
-// 	}
-
-// 	// Device id is libseats internal handle to the device, it takes it again when closing the device
-// 	app.device_id = libseat_open_device(app.seat, "/dev/dri/card0", &app.device_fd);
-// 	if (app.device_id == -1)
-// 		MQ_XERRNO("Failed to open device");
-
-// 	DEFER([&app]() { close(app.device_fd); });
-// 	DEFER([&app]() { libseat_close_device(app.seat, app.device_id); });
-// 	int fd = app.device_fd;
-
-// 	if (drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1))
-// 		MQ_XERRNO("Failed to enable atomic commits");
-
-// 	// Gives us access to the real planes, i.e. the primary plane.
-// 	// This isn't enabled by default for legacy programs not using the API
-// 	if (drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1))
-// 		MQ_XERRNO("Failed to enable universal planes");
-
-// 	// A struct containing the handles & counts for encoders, connectors, and CRTCs
-// 	// eg. 	uint32_t *encoders; is an array of the handles/ids of the encoders
-// 	// Note that these are just handles, you get the actual objects later with drmModeGetX()
-// 	// https://manpages.debian.org/testing/libdrm-dev/drmModeGetResources.3.en.html
-// 	drmModeRes* resources = drmModeGetResources(fd);
-// 	if (!resources)
-// 		MQ_XERRNO("Failed to get resources");
-// 	DEFER([resources]() { drmModeFreeResources(resources); });
-
-// 	// Same, but for planes
-// 	drmModePlaneRes* plane_resources = drmModeGetPlaneResources(fd);
-// 	if (!plane_resources)
-// 		MQ_XERRNO("Failed to get plane resources");
-// 	DEFER([plane_resources]() { drmModeFreePlaneResources(plane_resources); });
-
-// 	// Select the connector
-// 	drmModeConnector* connector = nullptr;
-// 	for (int i = 0; i < resources->count_connectors; ++i) {
-// 		drmModeConnector* c = drmModeGetConnector(fd, resources->connectors[i]);
-// 		if (!c)
-// 			continue;
-// 		// Check if there is atleast one mode on the connector, i'd think that all connectors that are connected
-// 		// atleast already have one mode, but i've seen others do this check, so I will be a sheep
-// 		// (The mode is refresh rate, resolution, etc)
-// 		if (c->connection == DRM_MODE_CONNECTED && c->count_modes > 0) {
-// 			connector = c;
-// 			break;
-// 		} else {
-// 			drmModeFreeConnector(c);
-// 		}
-// 	}
-// 	if (!connector)
-// 		MQ_XERROR("Failed to find a suitable connector");
-// 	DEFER([connector]() { drmModeFreeConnector(connector); });
-
-// 	// Select the CRTC
-// 	std::int32_t crtc_index = -1; // There can be a max of 32 CRTCs specified by the possible_crtcs bitmask, so the range is fine
-// 	for (int i = 0; i < connector->count_encoders && crtc_index == -1; ++i) {
-// 		drmModeEncoder* encoder = drmModeGetEncoder(fd, connector->encoders[i]);
-// 		if (!encoder)
-// 			continue;
-// 		DEFER([encoder]() { drmModeFreeEncoder(encoder); });
-// 		for (int j = 0; j < resources->count_crtcs; ++j) {
-// 			// possible_crtcs is a bitmask, mapping to resources->crtcs[bit]
-// 			// Eg. 1011 would mean that the 1st, 3rd and 4th CRTCs are useable
-// 			// 1 << j just means take 1, then shift it leftwards J times.
-// 			// Anding this with possible_crtcs, will give some number, or 0
-// 			if (encoder->possible_crtcs & (std::uint32_t {1} << j)) {
-// 				crtc_index = j;
-// 			}
-// 		}
-// 	}
-// 	if (crtc_index == -1)
-// 		MQ_XERROR("Failed to find matching CRTC");
-
-// 	std::uint32_t plane_handle = 0; // handles cannot be 0. Only the handle is later needed, hence why we don't store the full object
-// 	for (int i = 0; i < plane_resources->count_planes; ++i) {
-// 		drmModePlane* plane = drmModeGetPlane(fd, plane_resources->planes[i]);
-// 		if (!plane)
-// 			continue;
-// 		DEFER([plane]() { drmModeFreePlane(plane); });
-// 		// Same trick, as with the CRTCs
-// 		if (plane->possible_crtcs & (std::uint32_t {1} << crtc_index)) {
-// 			// Type is a property value, because it's an additional cap from atomic
-// 			auto type = get_property_value(fd, plane_resources->planes[i], DRM_MODE_OBJECT_PLANE, "type");
-// 			if (type == DRM_PLANE_TYPE_PRIMARY)
-// 				plane_handle = plane->plane_id;
-// 		}
-// 	}
-// 	if (!plane_handle)
-// 		MQ_XERROR("Failed to find primary plane");
-
-// 	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
-// 	if (!atomic_request)
-// 		MQ_XERROR("Failed to allocate atomic request");
-// 	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
-// 	// drmModeAtomicAddProperty takes atomic_request, object_id (object handle), property_id (property handle), property value
-
-// 	std::uint32_t crtc_handle = resources->crtcs[crtc_index];
-// 	// Set the chosen CRTC that drives this connector
-// 	drmModeAtomicAddProperty(atomic_request, connector->connector_id, *get_property_handle(fd, connector->connector_id, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), crtc_handle);
-// 	// Set the CRTC to be active (actually scanning out data)
-// 	drmModeAtomicAddProperty(atomic_request, crtc_handle, *get_property_handle(fd, crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 1);
-// 	// Set the mode the CRTC is operating with (eg. refresh, res, etc). We're choosing the 0th mode arbitrarily
-// 	// The connector->modes[] array is NOT an array of the mode handles. Modes do not have handles, they are infact just directly stored (as drmModeModeInfo)
-// 	// in the array as their values. Hence, there is no handle value to pass as an integer to atomic add property, as the mode is directly the value.
-// 	// Therefore, we use drmModeCreatePropertyBlob to upload the mode struct to the kernel, which will then give us an id/handle to use to refer to it.
-// 	auto mode = connector->modes[0];
-// 	std::uint32_t mode_blob_handle;
-// 	if (drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &mode_blob_handle))
-// 		MQ_XERRNO("Failed to create mode property blob");
-// 	DEFER([fd, mode_blob_handle]() { drmModeDestroyPropertyBlob(fd, mode_blob_handle); });
-// 	drmModeAtomicAddProperty(atomic_request, crtc_handle, *get_property_handle(fd, crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
-
-// 	// Create the graphics-execution-manager (GEM) buffer on the GPU (or CPU if needs be)
-// 	// This is nothing more than a pool of memory - a buffer can hold multiple memory planes for example
-// 	drm_mode_create_dumb create_request = {
-// 		.height = mode.vdisplay,
-// 		.width = mode.hdisplay,
-// 		.bpp = 32 // 32 bits per pixel, or 4 bytes. It's in bits for formats like 1bpp, where it's just on or off pixels
-// 	};
-// 	// Will assign the buffer for us on the kernel side, and set its handle to create_request.handle
-// 	// Will also fill in other additional fields. The pitch only works for *linear* formats, hence why it is a dumb buffer.
-// 	if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_request) < 0)
-// 		MQ_XERRNO("Failed to create GEM buffer");
-// 	DEFER([fd, &create_request]() {
-// 		drm_mode_destroy_dumb destroy_request = {.handle = create_request.handle};
-// 		drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_request);
-// 	});
-
-// 	struct {
-// 		std::uint32_t framebuffer_handle, buffer_handle, pitch, width, height;
-// 		std::uint64_t size;
-// 		std::byte* map_start;
-// 	} framebuffer = {
-// 		.buffer_handle = create_request.handle,
-// 		.pitch = create_request.pitch, // Bytes from start of one pixel row to the next. May be more than width * (bpp/8), because of padding, if the driver requires it
-// 		.width = mode.hdisplay,
-// 		.height = mode.vdisplay,
-// 		.size = create_request.size,
-// 	};
-
-// 	// DRM/KMS supports a maximum of 4 memory planes; colour formats generally don't need any more than this
-// 	// XRGB888 only uses 1 plane, but see https://www.youtube.com/watch?v=3dET-EoIMM8 to see how other formats use multiple.
-// 	// For example, YCbCr(YUV) could have 2 planes, 1 for the brightness (Y), and 1 for the (Cb[blue-ness], Cr[red-ness])
-// 	// Multiple planes can be stored in one GEM buffer, hence the offset to say where each plane starts.
-// 	// We only need to supply the width+height once to the addFB2, because the format can work it out for the rest of the planes
-// 	// (eg. with nv12, the width/height of the 2nd plane is halved). However, we must supply pitch per-plane because we could
-// 	// pack multiple memory planes into one GEM buffer (hence the offset, if we do), but then it's on us to ensure it's padded
-// 	// to the correct byte boundaries, which means that the pitch cannot be solely derived from the main plane's pitch
-// 	// (only the minimum pitch could be)
-// 	std::uint32_t handles[4] = {}, pitches[4] = {}, offsets[4] = {};
-// 	handles[0] = framebuffer.buffer_handle;
-// 	pitches[0] = framebuffer.pitch;
-// 	offsets[0] = 0;
-// 	if (drmModeAddFB2(fd, framebuffer.width, framebuffer.height, DRM_FORMAT_XRGB8888, handles, pitches, offsets, &framebuffer.framebuffer_handle, 0))
-// 		MQ_XERRNO("Failed to create framebuffer");
-// 	DEFER([fd, &framebuffer]() { drmModeRmFB(fd, framebuffer.framebuffer_handle); });
-
-// 	// Map the buffer, so we can write to it. Since the one fd can have many mmappable buffers
-// 	// this ioctl gives us the offset for the GEM buffer we just made;
-// 	drm_mode_map_dumb map_request = {.handle = framebuffer.buffer_handle};
-// 	if (drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map_request) < 0)
-// 		MQ_XERRNO("Failed to map buffer (drm)");
-// 	framebuffer.map_start = static_cast<std::byte*>(mmap(0, framebuffer.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, map_request.offset));
-// 	if (framebuffer.map_start == MAP_FAILED)
-// 		MQ_XERRNO("Failed to map buffer (mmap)");
-// 	DEFER([&framebuffer]() { munmap(framebuffer.map_start, framebuffer.size); });
-
-// 	for (std::uint32_t row = 0; row < framebuffer.height; ++row) {
-// 		auto start = framebuffer.map_start + row * framebuffer.pitch;
-// 		for (std::uint32_t column = 0; column < framebuffer.width; ++column) {
-// 			*reinterpret_cast<std::uint32_t*>(start + column * 4) = 0x12345678;
-// 		}
-// 	}
-
-// 	// Assign the frame buffer to the plane
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), framebuffer.framebuffer_handle);
-// 	// Tell the plane about the CRTC it feeds into. We do it on the planes end because a plane can only link to one CRTC, where as a CRTC may link to many planes
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), crtc_handle);
-// 	// The SRC_ values use 16whole.16decimal numbers (ie. decimal point half way through in 32 bit number)
-// 	// This is done to allow fractional co-ordinates, in cases where the SRC_size is smaller than the CRTC_output_size (hence you can still refer to pixels on the CRTC)
-// 	// X position of where to start reading inside the framebuffer
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_X"), 0 << 16);
-// 	// Y position of where to start reading inside the framebuffer
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_Y"), 0 << 16);
-// 	// How many x pixels to read (width) from the framebuffer
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_W"), framebuffer.width << 16);
-// 	// How many y pixels to read (height, downwards) from the framebuffer
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_H"), framebuffer.height << 16);
-// 	// The output co-ordinates of where to put that sampled plane onto the CRTC
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_X"), 0);
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), framebuffer.width);
-// 	drmModeAtomicAddProperty(atomic_request, plane_handle, *get_property_handle(fd, plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), framebuffer.height);
-
-// 	if (drmModeAtomicCommit(fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
-// 		MQ_XERRNO("Failed attomic commit");
-
-// 	sleep(2);
-// }
