@@ -6,72 +6,9 @@ module;
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 export module mayday;
+export import mayday.reality;
 import mayquill;
 import vulkan;
-
-// using namespace mayquill;
-struct Seat {
-	bool active;
-	libseat* seat;
-	int seat_fd;
-	int device_id;
-	int device_fd;
-};
-
-struct Udev {
-	udev* context;
-	udev_monitor* watch;
-	int watch_fd;
-};
-
-struct VkFrame {
-	vk::raii::CommandBuffer command_buffer;
-	vk::raii::DeviceMemory memory;
-	vk::raii::Image image;
-	vk::raii::ImageView image_view;
-	vk::DrmFormatModifierProperties2EXT drm_modifier;
-	std::vector<vk::SubresourceLayout> memory_planes_layouts;
-	int dmabuf_fd; // We create the image in vulkan, but get an FD to it, so DRM can import that image as a GEM buffer
-};
-
-struct Frame {
-	vk::raii::CommandBuffer command_buffer;
-	std::uint32_t semaphore_value;
-	vk::raii::DeviceMemory memory;
-	vk::raii::Image image;
-	vk::raii::ImageView image_view;
-	vk::DrmFormatModifierProperties2EXT drm_modifier;
-	std::vector<vk::SubresourceLayout> memory_planes_layouts;
-
-	std::uint32_t framebuffer_handle;
-};
-
-struct VkMonitor {
-	vk::raii::CommandPool command_pool;
-	std::vector<VkFrame> frames;
-};
-
-struct Monitor {
-	std::uint32_t connector_handle;
-    std::uint32_t encoder_handle;
-	std::uint32_t crtc_handle;
-	std::uint32_t plane_handle;
-	drmModeModeInfo mode;
-	vk::raii::CommandPool command_pool;
-	std::vector<Frame> frames;
-};
-
-struct Render {
-	vk::raii::Context context;
-	vk::raii::Instance instance;
-	vk::raii::PhysicalDevice physical_device;
-	vk::raii::Device device;
-	std::uint32_t queue_family_index;
-	vk::raii::Queue queue;
-	vk::raii::Pipeline graphics_pipeline;
-	vk::raii::Semaphore semaphore;
-	std::vector<vk::DrmFormatModifierProperties2EXT> supported_drm_modifiers;
-};
 
 void enable_seat(libseat* libseat, void* user_data) {
 	auto seat = static_cast<Seat*>(user_data);
@@ -87,24 +24,23 @@ void disable_seat(libseat* libseat, void* user_data) {
 	// No need to re-open devices, the fd is not invalidated, it isn't useable until re-enabling
 }
 
-export class Mayday {
+// Reality contains the non-wayland (ie. vulkan, drm, seat etc) fields
+export class Mayday : public Reality {
   private:
 	/* Vulkan shit */
 	// Gets the vulkan "objects"
-	Render get_shit();
+	static Render get_shit();
 	VkMonitor get_vk_monitor(std::uint32_t width, std::uint32_t height, std::uint32_t frame_count);
 
   public:
 	/* Mainly drm shit */
 	void regenerate_monitors();
 
-	Seat seat;
-	Udev udevd;
 	mayquill::Server server;
-	Render render;
-	std::vector<Monitor> monitors;
 
-	Mayday() : render(get_shit()) {
+	Mayday() : Reality {
+		.render = get_shit(),
+	} {
 
 		//* LIBSEAT *//
 		libseat_seat_listener listener = {
@@ -167,6 +103,8 @@ export class Mayday {
 
 		regenerate_monitors();
 
+        //* SERVER *//
+        server.reference = static_cast<Reality*>(this);
 		server.bind_socket();
 	}
 

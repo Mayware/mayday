@@ -311,7 +311,6 @@ void Mayday::regenerate_monitors() {
 				MQ_XERRNO("Failed to create framebuffer");
 
 			frames.push_back(Frame {
-				.command_buffer = std::move(vk_frame.command_buffer),
 				.memory = std::move(vk_frame.memory),
 				.image = std::move(vk_frame.image),
 				.image_view = std::move(vk_frame.image_view),
@@ -328,7 +327,7 @@ void Mayday::regenerate_monitors() {
 			.crtc_handle = std::move(monitor.crtc_handle),
 			.plane_handle = std::move(monitor.plane_handle),
 			.mode = std::move(monitor.mode),
-			.command_pool = std::move(vk_monitor.command_pool),
+			.command = std::move(vk_monitor.command),
 			.frames = std::move(frames),
 		});
 	}

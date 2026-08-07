@@ -14,7 +14,7 @@ void ZwlrLayerShellV1::handle(Request request) {
 							   request.output ? std::optional(client.grab_object<WlOutput>(*request.output).key) : std::nullopt,
 							   request.layer,
 							   request._namespace));
-					   gimme_data<WlSurfaceData>(surface).set_role<ZwlrLayerSurfaceV1*>(layer_surface.key);
+					   gimme_data<WlSurfaceData>(surface).set_role<ZwlrLayerSurfaceV1>(layer_surface.key);
 				   },
 				   [this](Destroy& request) {}},
 		request);
@@ -63,14 +63,14 @@ void XdgSurface::handle(Request request) {
 					   auto& surface = client.get_object<WlSurface>(surface_key);
 					   auto toplevel = client.add_object<XdgToplevel>(request.id,
 						   std::make_unique<XdgToplevelData>(surface_key, keyd));
-					   gimme_data<WlSurfaceData>(surface).set_role<XdgToplevel*>(toplevel.key);
+					   gimme_data<WlSurfaceData>(surface).set_role<XdgToplevel>(toplevel.key);
 				   },
 				   [this](GetPopup& request) {
 					   auto surface_key = gimme_data<XdgSurfaceData>(user_data).surface;
 					   auto& surface = client.get_object<WlSurface>(surface_key);
 					   auto popup = client.add_object<XdgPopup>(request.id,
 						   std::make_unique<XdgPopupData>(surface_key, keyd));
-					   gimme_data<WlSurfaceData>(surface).set_role<XdgPopup*>(popup.key);
+					   gimme_data<WlSurfaceData>(surface).set_role<XdgPopup>(popup.key);
 				   },
 				   [this](SetWindowGeometry& request) {},
 				   [this](AckConfigure& request) {},

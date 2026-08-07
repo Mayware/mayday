@@ -29,7 +29,7 @@ void WlCompositor::handle(Request request) {
 	std::visit(overload {
 				   [this](CreateSurface& request) {
 					   client.add_object<WlSurface>(request.id,
-						   std::make_unique<WlSurfaceData>());
+						   std::make_unique<WlSurfaceData>(client));
 				   },
 				   [this](CreateRegion& request) {
 					   client.add_object<WlRegion>(request.id);
@@ -46,44 +46,45 @@ void WlSurface::handle(Request request) {
 					   if (request.x != 0 || request.y != 0)
 						   client.error(keyd.id, WlSurface::ErrorEnum::InvalidOffset,
 							   std::format("X and Y must be 0, but they were {} and {}", request.x, request.y));
-					   surface_data.buffer.buffer(request.buffer ? std::optional(client.grab_object<WlBuffer>(*request.buffer).key) : std::nullopt);
+					   surface_data.delta.buffer.buffer = request.buffer ? std::optional(client.grab_object<WlBuffer>(*request.buffer).key) : std::nullopt;
 				   },
 				   [this](Damage& request) {},
-				   [this](Frame& request) {
+				   [this, &surface_data](Frame& request) {
 					   auto callback = client.add_object<WlCallback>(request.callback);
-					   callback.object.done(client.elapsed_time());
-                       callback.object.destroy();
+					   surface_data.delta.frame_callbacks.push_back(callback.key);
 				   },
 				   [this](SetOpaqueRegion& request) {},
 				   [this](SetInputRegion& request) {},
 				   [this, &surface_data](Commit& request) {
-					   surface_data.buffer.commit();
+					   surface_data.commit_pending_delta();
 
+					   // XDG surfaces expect us to send an 'initial configure' on their first commit
+					   // Otherwise, they'll just sit there, waiting, menacingly
 					   if (surface_data.initial_configured == false) {
-						   if (surface_data.is_role<XdgToplevel*>() || surface_data.is_role<XdgPopup*>()) {
-                               XdgSurface* xdg_surface;
-							   if (surface_data.is_role<XdgToplevel*>()) {
+						   if (surface_data.is_role<XdgToplevel>() || surface_data.is_role<XdgPopup>()) {
+							   XdgSurface* xdg_surface;
+							   if (surface_data.is_role<XdgToplevel>()) {
 								   auto& toplevel = client.get_object<XdgToplevel>(*surface_data.role);
 								   toplevel.configure(0, 0, std::vector<std::uint8_t> {});
-                                   xdg_surface = &client.get_object<XdgSurface>(gimme_data<XdgToplevelData>(toplevel).xdg_surface);
+								   xdg_surface = &client.get_object<XdgSurface>(gimme_data<XdgToplevelData>(toplevel).xdg_surface);
 							   } else {
-                                   assert(false);
+								   assert(false);
 							   }
 							   xdg_surface->configure(client.next_serial(gimme_data<XdgSurfaceData>(*xdg_surface).serials));
-                               surface_data.initial_configured = true;
-						   } else if (surface_data.is_role<ZwlrLayerSurfaceV1*>()) {
-                               assert(false);
-						   } else if (surface_data.is_role<WlSubsurface*>()) {
+							   surface_data.initial_configured = true;
+						   } else if (surface_data.is_role<ZwlrLayerSurfaceV1>()) {
+							   assert(false);
+						   } else if (surface_data.is_role<WlSubsurface>()) {
 							   surface_data.initial_configured = true;
 						   } else {
 							   MQ_XERROR("Incorrectly configured role");
 						   }
-                           MQ_INFO("Sent initial configure");
+						   MQ_INFO("Sent initial configure");
 					   }
 
-                       if (surface_data.buffer.held()) {
-                           client.get_object<WlBuffer>((*surface_data.buffer.held())).release();
-                       }
+					   // if (surface_data.buffer.held()) {
+					   // client.get_object<WlBuffer>((*surface_data.buffer.held())).release();
+					   // }
 				   },
 				   [this](SetBufferTransform& request) {},
 				   [this](SetBufferScale& request) {},
@@ -101,7 +102,7 @@ void WlSubcompositor::handle(Request request) {
 					   auto surface = client.grab_object<WlSurface>(request.surface);
 					   auto parent = client.grab_object<WlSurface>(request.parent);
 					   auto subsurface = client.add_object<WlSubsurface>(request.id, std::make_unique<WlSubsurfaceData>(surface.key, parent.key));
-					   gimme_data<WlSurfaceData>(surface).set_role<WlSubsurface*>(subsurface.key);
+					   gimme_data<WlSurfaceData>(surface).set_role<WlSubsurface>(subsurface.key);
 					   gimme_data<WlSurfaceData>(parent).children.push_back(subsurface.key);
 				   },
 				   [this](Destroy& request) {},
@@ -110,14 +111,18 @@ void WlSubcompositor::handle(Request request) {
 }
 
 void WlSubsurface::handle(Request request) {
+	auto& subsurface_data = gimme_data<WlSubsurfaceData>(user_data);
 	std::visit(overload {
 				   [this](SetPosition& request) {},
 				   [this](PlaceAbove& request) {},
 				   [this](PlaceBelow& request) {},
-				   [this](SetSync& request) {},
-				   [this](SetDesync& request) {},
-				   [this](Destroy& request) {
-					   auto& subsurface_data = gimme_data<WlSubsurfaceData>(user_data);
+				   [this, &subsurface_data](SetSync& request) {
+					   subsurface_data.synchronised = true;
+				   },
+				   [this, &subsurface_data](SetDesync& request) {
+					   subsurface_data.synchronised = false;
+				   },
+				   [this, &subsurface_data](Destroy& request) {
 					   auto& surface = client.get_object<WlSurface>(subsurface_data.surface);
 					   gimme_data<WlSurfaceData>(surface).remove_role();
 

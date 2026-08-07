@@ -1,5 +1,6 @@
 export module mayday.util;
 import std;
+import mayday.reality;
 
 // For variant matching
 export template<class... Ts>
@@ -8,42 +9,6 @@ struct overload : Ts... {
 };
 template<class... Ts>
 overload(Ts...) -> overload<Ts...>;
-
-// Buffered class, allows for a pending value which eventually overwrites the current
-export template<typename T>
-class Buffered {
-  private:
-	bool dirty = false;
-	T current;
-	T pending;
-
-  public:
-	Buffered(T&& initial) : current(std::move(initial)) {}
-
-	void buffer(T&& recent) {
-		pending = std::move(recent);
-		dirty = true;
-	}
-
-	void commit() {
-		if (dirty == true) {
-			current = std::move(pending);
-			// Pending doesn't need to be changed, we won't read from it again
-			dirty = false;
-		}
-	}
-
-	// Returns T is T is trivially copyable, else, returns T&
-	decltype(auto) held() {
-		if constexpr (std::is_trivially_copyable_v<T>) {
-			return current;
-		} else {
-			// When decltype sees an arg wrapped in parenthesis, it appends & to the type
-			// https://en.cppreference.com/cpp/language/decltype
-			return (current);
-		}
-	}
-};
 
 // A helper to return the userdata, from any of the following heirarchies
 // T&& is a forwarding type (not temporary), so it allows references, and temporaries
@@ -58,6 +23,19 @@ T& gimme_data(Target&& target) {
 	} else {
 		static_assert(false, "Unsupported source given for user data");
 	}
+}
+
+export template<typename Target>
+Reality& gimme_reality(Target&& target) {
+	if constexpr (requires { target.server.reference; }) {
+		return *static_cast<Reality*>(target.server.reference);
+	} else {
+        static_assert(false, "Unsupported source given for reality");
+    }
+}
+
+export std::uint64_t combine_u32s(std::uint32_t high, std::uint32_t low) {
+    return (static_cast<std::uint64_t>(high) << 32) | static_cast<std::uint64_t>(low);
 }
 
 // Aribtrary typelist, for example TypeList<MyTyp1, MyType2>
@@ -97,8 +75,9 @@ constexpr std::size_t type_index_v = TypeIndex<List, T>::value;
 export template<typename Fn>
 class Defer {
   private:
-      Fn callback;
+	Fn callback;
+
   public:
 	Defer(Fn callback) : callback(std::move(callback)) {}
-    ~Defer()  { callback(); }
+	~Defer() { callback(); }
 };

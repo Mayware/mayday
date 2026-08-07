@@ -26,7 +26,7 @@ constexpr vk::Format image_format = vk::Format::eB8G8R8A8Unorm;
 constexpr std::array<const char*, 3> required_extensions = {
 	vk::EXTImageDrmFormatModifierExtensionName, // Allows us to use DRM format modifiers with images
 	vk::KHRExternalMemoryFdExtensionName,		// Ability to export device memory as POSIX FD's (generic)
-	vk::EXTExternalMemoryDmaBufExtensionName,       // As a DMABUF Fd, requires the one above
+	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
 };
 
 // spirv wordsd are uint32's
@@ -48,15 +48,8 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		// Buffers can be submitted to any queue in the same family
 		.queueFamilyIndex = render.queue_family_index,
 	};
-	auto command_pool = render.device.createCommandPool(command_pool_info);
-	vk::CommandBufferAllocateInfo command_buffer_allocate_info = {
-		.commandPool = *command_pool,
-		// Primary buffers can be submitted directly to the queue
-		// the other option is a secondary buffer, which is in turn submitted to the primary buffer
-		.level = vk::CommandBufferLevel::ePrimary,
-		.commandBufferCount = frame_count,
-	};
-	auto command_buffers = vk::raii::CommandBuffers(render.device, command_buffer_allocate_info);
+
+    auto command = beg_pool(1);
 
 	// Collate the valid drm modifiers, into just a vector of their IDs
 	std::vector<std::uint64_t> drm_modifiers_ids;
@@ -198,7 +191,6 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		auto image_view = render.device.createImageView(image_view_info);
 
 		frames.push_back(VkFrame {
-			.command_buffer = std::move(command_buffers[i]),
 			.memory = std::move(image_memory),
 			.image = std::move(image),
 			.image_view = std::move(image_view),
@@ -209,7 +201,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 	}
 
 	return VkMonitor {
-		.command_pool = std::move(command_pool),
+		.command = std::move(command),
 		.frames = std::move(frames),
 	};
 }
