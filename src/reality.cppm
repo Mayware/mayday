@@ -67,6 +67,13 @@ export struct Monitor {
 	std::vector<Frame> frames;
 };
 
+export struct UltraFormat {
+	std::uint32_t drm_format;
+	std::vector<vk::DrmFormatModifierProperties2EXT> drm_modifiers;
+	vk::Format vk_format;
+	vk::ComponentMapping vk_swizzed;
+};
+
 export struct Render {
 	vk::raii::Context context;
 	vk::raii::Instance instance;
@@ -77,7 +84,7 @@ export struct Render {
 	std::mutex queue_mutex;
 	vk::raii::Pipeline graphics_pipeline;
 	vk::raii::Semaphore semaphore;
-	std::vector<vk::DrmFormatModifierProperties2EXT> supported_drm_modifiers;
+	std::vector<UltraFormat> ultra_formats;
 
 	std::vector<Command> free_pools;
 };

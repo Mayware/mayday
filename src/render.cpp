@@ -1,4 +1,5 @@
 module;
+#include <drm_fourcc.h>
 #include <mayquill/logger.h>
 module mayday;
 import vulkan;
@@ -18,8 +19,6 @@ import mayquill;
 // DRM/KMS also has the idea of "planes", but for them it means the output planes the GPU supports, as in primary plane, overlay plane, ie. layers that the CRTC can blend
 
 constexpr auto vk_version = vk::ApiVersion14;
-// This is our internal image format, we use for our monitor's frames
-constexpr vk::Format image_format = vk::Format::eB8G8R8A8Unorm;
 
 // To get the equivalent enum, take the string name, PascalCase it, and append ExtensionName
 // The enum points to a macro, which just defines the string
@@ -28,6 +27,85 @@ constexpr std::array<const char*, 3> required_extensions = {
 	vk::KHRExternalMemoryFdExtensionName,		// Ability to export device memory as POSIX FD's (generic)
 	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
 };
+
+// Our internal image format is the 0 index, which is equivalent to vk::Format::eB8G8R8A8Unorm
+constexpr std::array supported_drm_formats = {
+	DRM_FORMAT_XRGB8888,
+	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_XBGR8888,
+	DRM_FORMAT_ABGR8888,
+	DRM_FORMAT_RGBX8888,
+	DRM_FORMAT_RGBA8888,
+	DRM_FORMAT_BGRX8888,
+	DRM_FORMAT_BGRA8888,
+	DRM_FORMAT_XRGB2101010,
+	DRM_FORMAT_ARGB2101010,
+	DRM_FORMAT_XBGR2101010,
+	DRM_FORMAT_ABGR2101010,
+	DRM_FORMAT_BGR161616,
+	DRM_FORMAT_RGB161616,
+	DRM_FORMAT_XBGR16161616,
+	DRM_FORMAT_ABGR16161616,
+	DRM_FORMAT_XRGB16161616,
+	DRM_FORMAT_ARGB16161616,
+	DRM_FORMAT_XBGR16161616F,
+	DRM_FORMAT_ABGR16161616F,
+	DRM_FORMAT_XRGB16161616F,
+	DRM_FORMAT_ARGB16161616F,
+};
+
+// DRM formats are little endian, so RGB would be stored as BGR. Vulkan just reads in normal order, hence it being inversed.
+// Vulkan doesn't say if some bits are unused, nor does it have all the unique RGB, BGR, GBR combos etc, so the swizzling is to get that (and to blank out alpha to just padding as required)
+std::pair<vk::Format, vk::ComponentMapping> fourcc_to_vk(std::uint32_t format) {
+	switch (format) {
+	case DRM_FORMAT_XRGB8888:
+		return {vk::Format::eB8G8R8A8Unorm, {.a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ARGB8888:
+		return {vk::Format::eB8G8R8A8Unorm, {}};
+	case DRM_FORMAT_XBGR8888:
+		return {vk::Format::eR8G8B8A8Unorm, {.a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ABGR8888:
+		return {vk::Format::eR8G8B8A8Unorm, {}};
+	case DRM_FORMAT_RGBX8888:
+		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eA, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eG, .a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_RGBA8888:
+		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eA, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eG, .a = vk::ComponentSwizzle::eR}};
+	case DRM_FORMAT_BGRX8888:
+		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eG, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eA, .a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_BGRA8888:
+		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eG, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eA, .a = vk::ComponentSwizzle::eR}};
+	case DRM_FORMAT_XRGB2101010:
+		return {vk::Format::eA2R10G10B10UnormPack32, {.a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ARGB2101010:
+		return {vk::Format::eA2R10G10B10UnormPack32, {}};
+	case DRM_FORMAT_XBGR2101010:
+		return {vk::Format::eA2B10G10R10UnormPack32, {.a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ABGR2101010:
+		return {vk::Format::eA2B10G10R10UnormPack32, {}};
+	case DRM_FORMAT_BGR161616:
+		return {vk::Format::eR16G16B16Unorm, {}};
+	case DRM_FORMAT_RGB161616:
+		return {vk::Format::eR16G16B16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
+	case DRM_FORMAT_XBGR16161616:
+		return {vk::Format::eR16G16B16A16Unorm, {.a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ABGR16161616:
+		return {vk::Format::eR16G16B16A16Unorm, {}};
+	case DRM_FORMAT_XRGB16161616:
+		return {vk::Format::eR16G16B16A16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ARGB16161616:
+		return {vk::Format::eR16G16B16A16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
+	case DRM_FORMAT_XBGR16161616F:
+		return {vk::Format::eR16G16B16A16Sfloat, {.a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ABGR16161616F:
+		return {vk::Format::eR16G16B16A16Sfloat, {}};
+	case DRM_FORMAT_XRGB16161616F:
+		return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eOne}};
+	case DRM_FORMAT_ARGB16161616F:
+		return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
+	default:
+		MQ_XERROR("Invalid drm format");
+	}
+}
 
 // spirv wordsd are uint32's
 std::vector<std::uint32_t> read_spirv(std::string name) {
@@ -49,12 +127,13 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		.queueFamilyIndex = render.queue_family_index,
 	};
 
-    auto command = beg_pool(1);
+	auto command = beg_pool(1);
 
 	// Collate the valid drm modifiers, into just a vector of their IDs
+	auto& base_format = render.ultra_formats[0];
 	std::vector<std::uint64_t> drm_modifiers_ids;
-	drm_modifiers_ids.reserve(render.supported_drm_modifiers.size());
-	for (auto modifier : render.supported_drm_modifiers) {
+	drm_modifiers_ids.reserve(base_format.drm_modifiers.size());
+	for (auto modifier : base_format.drm_modifiers) {
 		drm_modifiers_ids.push_back(modifier.drmFormatModifier);
 	}
 	vk::ImageDrmFormatModifierListCreateInfoEXT potential_modifiers_info = {
@@ -68,7 +147,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		vk::ImageCreateInfo image_info = {
 			.pNext = &potential_modifiers_info, // The driver knows best. (It will pick its preferred one)
 			.imageType = vk::ImageType::e2D,	// e just means enum
-			.format = image_format,
+			.format = render.ultra_formats[0].vk_format,
 			.extent = {
 				.width = width,
 				.height = height,
@@ -107,7 +186,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		// Therefore, we need to lookup the id in the supported_drm_modifiers to get the full deets
 		vk::DrmFormatModifierProperties2EXT image_drm_modifier;
 		// This should always land
-		for (auto& possible_modifier : render.supported_drm_modifiers) {
+		for (auto& possible_modifier : base_format.drm_modifiers) {
 			if (possible_modifier.drmFormatModifier == image_drm_modifier_id) {
 				image_drm_modifier = possible_modifier;
 				break;
@@ -126,11 +205,12 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		for (int i = 0; i < image_drm_modifier.drmFormatModifierPlaneCount; ++i) {
 			memory_planes_layouts.push_back(image.getSubresourceLayout(vk::ImageSubresource {
 				.aspectMask = memory_planes[i],
-				// Mips / array layers would give different offsets, of course
+				// Mips / array layers would give different offsets, of course (ie. if we had miplevels, we could choose which we wanted)
 				.mipLevel = 0,
 				.arrayLayer = 0,
 			}));
 		}
+		// The subresource then gives us the offset, size, rowPitch of that plane in memory
 
 		// Allocate the memory
 		auto memory_requirements = image.getMemoryRequirements();
@@ -175,7 +255,9 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 			// You could interpret a 3d image as a 2d image with array layers
 			.viewType = vk::ImageViewType::e2D,
 			// The format is allowed to differ, (ie. reading R8G8B8A8Unorm as R8G8B8A8Srgb), if the format is compatible
-			.format = image_format,
+			.format = render.ultra_formats[0].vk_format,
+			// The swizzle, ie. swapping colour channels
+			.components = render.ultra_formats[0].vk_swizzed,
 			.subresourceRange = {
 				// If the image stores multiple data in one (eg.interleaved depth/stencil), we can pick just the data we want
 				// In our case, all our data is colour
@@ -341,6 +423,28 @@ Render Mayday::get_shit() {
 	auto device = physical_device.createDevice(device_info);
 	auto queue = device.getQueue(queue_family_index, 0); // If we requested 5 to be made, we could get 0 through to 4
 
+	// Get what DRM modifiers our GPU supports for each DRM format
+	// https://docs.vulkan.org/refpages/latest/refpages/source/VkDrmFormatModifierPropertiesList2EXT.html
+	// If DrmFormatModifierPropertiesList2's properties field is null, it fills in its count field for us when we call getFormatProperties2
+	// We then allocate a vector based on that count, then give it to the properties data field, then call getFormatProperties2 again
+	// and then it will fill in the data. I believe this pattern is done so vulkan never allocates for us, we must do allocations ourself
+	std::vector<UltraFormat> ultra_formats;
+	for (auto drm_format : supported_drm_formats) {
+		auto vk_format = fourcc_to_vk(drm_format);
+		auto format_properties = physical_device.getFormatProperties2<vk::FormatProperties2, vk::DrmFormatModifierPropertiesList2EXT>(vk_format.first);
+		auto& drm_modifiers_wrapper = format_properties.get<vk::DrmFormatModifierPropertiesList2EXT>(); // A pointer to the storage, and the number of entries
+		std::vector<vk::DrmFormatModifierProperties2EXT> drm_modifiers(drm_modifiers_wrapper.drmFormatModifierCount);
+		drm_modifiers_wrapper.pDrmFormatModifierProperties = drm_modifiers.data(); // Actually give it the pointer
+		physical_device.getFormatProperties2(vk_format.first, &format_properties.get<vk::FormatProperties2>());
+
+		ultra_formats.push_back(UltraFormat {
+			.drm_format = drm_format,
+			.drm_modifiers = std::move(drm_modifiers),
+			.vk_format = vk_format.first,
+			.vk_swizzed = vk_format.second,
+		});
+	}
+
 	// Create shaders
 	auto vert_spirv = read_spirv("shader.vert");
 	auto frag_spirv = read_spirv("shader.frag");
@@ -425,7 +529,7 @@ Render Mayday::get_shit() {
 	// Specify the formats of the colour attachments we will add
 	vk::PipelineRenderingCreateInfo pipeline_rendering_info = {
 		.colorAttachmentCount = 1,
-		.pColorAttachmentFormats = &image_format,
+		.pColorAttachmentFormats = &ultra_formats[0].vk_format,
 	};
 
 	// How to rasterize the traingles
@@ -476,17 +580,6 @@ Render Mayday::get_shit() {
 
 	auto semaphore = device.createSemaphore(vk::SemaphoreCreateInfo {.pNext = &semaphore_info});
 
-	// Get what DRM modifiers our GPU supports for our chosen format (regular RGBA, as per image_format)
-	// https://docs.vulkan.org/refpages/latest/refpages/source/VkDrmFormatModifierPropertiesList2EXT.html
-	// If DrmFormatModifierPropertiesList2's properties field is null, it fills in its count field for us when we call getFormatProperties2
-	// We then allocate a vector based on that count, then give it to the properties data field, then call getFormatProperties2 again
-	// and then it will fill in the data. I believe this pattern is done so vulkan never allocates for us, we must do allocations ourself
-	auto format_properties = physical_device.getFormatProperties2<vk::FormatProperties2, vk::DrmFormatModifierPropertiesList2EXT>(image_format);
-	auto& drm_list_properties = format_properties.get<vk::DrmFormatModifierPropertiesList2EXT>();
-	std::vector<vk::DrmFormatModifierProperties2EXT> drm_list(drm_list_properties.drmFormatModifierCount);
-	drm_list_properties.pDrmFormatModifierProperties = drm_list.data();
-	physical_device.getFormatProperties2(image_format, &format_properties.get<vk::FormatProperties2>());
-
 	return {
 		.context = std::move(context),
 		.instance = std::move(instance),
@@ -496,7 +589,7 @@ Render Mayday::get_shit() {
 		.queue = std::move(queue),
 		.graphics_pipeline = std::move(graphics_pipeline),
 		.semaphore = std::move(semaphore),
-		.supported_drm_modifiers = std::move(drm_list),
+		.ultra_formats = std::move(ultra_formats),
 	};
 }
 

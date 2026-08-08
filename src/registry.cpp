@@ -20,7 +20,7 @@ void WlDisplay::handle(Request request) {
 					   registry.object.global(4, std::string(XdgWmBase::interface), XdgWmBase::version);
 					   registry.object.global(5, std::string(ZwlrLayerShellV1::interface), ZwlrLayerShellV1::version);
 					   registry.object.global(6, std::string(WpFractionalScaleManagerV1::interface), WpFractionalScaleManagerV1::version);
-                       registry.object.global(7, std::string(ZwpLinuxDmabufV1::interface), ZwpLinuxDmabufV1::version);
+                       registry.object.global(7, std::string(ZwpLinuxDmabufV1::interface), 5); // Can't eal with the multi-gpu shit for now
                        registry.object.global(8, std::string(WpLinuxDrmSyncobjManagerV1::interface), WpLinuxDrmSyncobjManagerV1::version);
                        registry.object.global(9, std::string(WpFifoManagerV1::interface), WpFifoManagerV1::version);
                        registry.object.global(10, std::string(WpCommitTimingManagerV1::interface), WpCommitTimingManagerV1::version);

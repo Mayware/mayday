@@ -62,4 +62,49 @@ void WlShmPool::handle(Request request) {
 			   },
 		request);
 }
+
+struct Plane {
+	int fd;
+	std::uint32_t plane_index;
+	std::uint32_t offset;
+	std::uint32_t stride;
+	std::uint64_t modifier;
+};
+
+struct DmabufParams {
+	std::vector<Plane> planes;
+};
+
+void ZwpLinuxDmabufV1::handle(Request request) {
+	std::visit(overload {
+				   [this](CreateParams& request) {
+					   client.add_object<ZwpLinuxBufferParamsV1>(request.params_id, std::make_unique<DmabufParams>());
+				   },
+				   [this](GetDefaultFeedback& request) {},
+				   [this](GetSurfaceFeedback& request) {},
+				   [this](Destroy& request) {},
+			   },
+		request);
+}
+
+void ZwpLinuxBufferParamsV1::handle(Request request) {
+	auto& data = gimme_data<DmabufParams>(user_data);
+	std::visit(overload {
+				   [this, &data](Add& request) {
+					   data.planes.push_back(Plane {
+						   .fd = request.fd,
+						   .plane_index = request.plane_idx,
+						   .offset = request.offset,
+						   .stride = request.stride,
+						   .modifier = combine_u32s(request.modifier_hi, request.modifier_lo),
+					   });
+				   },
+				   [this](Create& request) {},
+				   [this](CreateImmed& request) {},
+				   [this](SetSamplingDevice& request) {},
+				   [this](Destroy& request) {},
+			   },
+		request);
+}
+
 } // namespace mayquill
