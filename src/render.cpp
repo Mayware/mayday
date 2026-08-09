@@ -22,13 +22,14 @@ constexpr auto vk_version = vk::ApiVersion14;
 
 // To get the equivalent enum, take the string name, PascalCase it, and append ExtensionName
 // The enum points to a macro, which just defines the string
-constexpr std::array<const char*, 3> required_extensions = {
+constexpr std::array required_extensions = {
 	vk::EXTImageDrmFormatModifierExtensionName, // Allows us to use DRM format modifiers with images
 	vk::KHRExternalMemoryFdExtensionName,		// Ability to export device memory as POSIX FD's (generic)
 	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
 };
 
 // Our internal image format is the 0 index, which is equivalent to vk::Format::eB8G8R8A8Unorm
+// You'll see we use ultra_formats[0].vk_format / ultra_formats[0].drm_format just hardcoded
 constexpr std::array supported_drm_formats = {
 	DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_ARGB8888,
@@ -170,8 +171,8 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 			// we could traverse it literally byte by byte to get pixels, but with this the GPU can choose whatever way it prefers to store it (eg. interlaced,
 			// or not consecutively), meaning we can't really assume the memory locations from the CPU any longer.
 			.tiling = vk::ImageTiling::eDrmFormatModifierEXT, // We provided the potential options in pnext
-			// We can use this as a colour attachment (for fragment shaders to render into) and as a transfer source into another image
-			.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc,
+			// We can use this as a colour attachment (for fragment shaders to render into)
+			.usage = vk::ImageUsageFlagBits::eColorAttachment,
 			// Only one queue family will operate on this image, because we only have one queue lmao. We could set to concurrent if more than one queue
 			// could use this image
 			.sharingMode = vk::SharingMode::eExclusive,
@@ -213,31 +214,19 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		// The subresource then gives us the offset, size, rowPitch of that plane in memory
 
 		// Allocate the memory
-		auto memory_requirements = image.getMemoryRequirements();
-		auto memory_properties = render.physical_device.getMemoryProperties();
-		std::uint32_t memory_type_index = std::numeric_limits<std::uint32_t>::max();
-		for (int i = 0; i < memory_properties.memoryTypeCount; ++i) {
-			auto property_flag = vk::MemoryPropertyFlagBits::eDeviceLocal;
-
-			// memoryTypeBits is a bitmask representing memory_properties.memoryTypes indices
-			// eg 1011 means the 1st, 3rd, and 4th memoryTypes are compatible.
-			if ((memory_requirements.memoryTypeBits & (1u << i)) != 0 &&
-				// Ensure the memory is on the GPU (device local), by checking the property_flags on the memoryType
-				(memory_properties.memoryTypes[i].propertyFlags & property_flag) == property_flag) {
-				memory_type_index = i;
-				break;
-			}
-		}
-		if (memory_type_index == std::numeric_limits<std::uint32_t>::max())
+        auto requirements = image.getMemoryRequirements();
+        auto memory_type_index = get_memory_type_index(*render.physical_device, requirements, vk::MemoryPropertyFlagBits::eDeviceLocal);
+        if (!memory_type_index.has_value())
 			MQ_XERROR("No appropriate image memory found");
+
 		// Make the memory exportable, as DRM will import it
 		vk::ExportMemoryAllocateInfo export_info = {
 			.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
 		};
 		vk::MemoryAllocateInfo allocation_info = {
 			.pNext = &export_info,
-			.allocationSize = memory_requirements.size,
-			.memoryTypeIndex = memory_type_index,
+			.allocationSize = requirements.size,
+			.memoryTypeIndex = *memory_type_index,
 		};
 		auto image_memory = render.device.allocateMemory(allocation_info);
 		image.bindMemory(image_memory, 0); // Last param is offset
@@ -376,7 +365,10 @@ Render Mayday::get_shit() {
 			// and the pipeline will create the module. Without this, we would need to do
 			// auto vert_shader_module = device.createShaderModule(vert_shader_info); and then pass that to the pipeline.
 			// It's just a bit cleaner
-			supported_14.maintenance5 == false) {
+			supported_14.maintenance5 == false ||
+			// https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_host_image_copy.html#_promotion_to_vulkan_1_4
+			// Lets us skip staging buffers, and upload images directly from CPU to GPU
+			supported_14.hostImageCopy == false) {
 			continue;
 		}
 
@@ -392,6 +384,7 @@ Render Mayday::get_shit() {
 	// Enable specified features
 	vk::PhysicalDeviceVulkan14Features features_14 = {
 		.maintenance5 = true,
+		.hostImageCopy = true,
 	};
 	vk::PhysicalDeviceVulkan13Features features_13 = {
 		.pNext = &features_14,

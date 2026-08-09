@@ -69,3 +69,18 @@ Command Reality::beg_pool(std::uint32_t buffer_count) {
 void Reality::donate_pool(Command&& command) {
 	render.free_pools.push_back(std::move(command));
 }
+
+std::optional<std::uint32_t> Reality::get_memory_type_index(vk::PhysicalDevice physical_device, vk::MemoryRequirements memory_requirements, vk::MemoryPropertyFlagBits property_flags) {
+	auto memory_properties = physical_device.getMemoryProperties();
+	std::uint32_t memory_type_index = std::numeric_limits<std::uint32_t>::max();
+	for (int i = 0; i < memory_properties.memoryTypeCount; ++i) {
+		// memoryTypeBits is a bitmask representing memory_properties.memoryTypes indices
+		// eg 1011 means the 1st, 3rd, and 4th memoryTypes are compatible.
+		if ((memory_requirements.memoryTypeBits & (1u << i)) != 0 &&
+			// Ensure all property flags (like being device local) are satisfied
+			(memory_properties.memoryTypes[i].propertyFlags & property_flags) == property_flags) {
+			return memory_type_index;
+		}
+	}
+    return std::nullopt;
+}

@@ -307,7 +307,8 @@ void Mayday::regenerate_monitors() {
 				offsets[i] = layout.offset;
 			}
 			std::uint32_t framebuffer_handle;
-			if (drmModeAddFB2WithModifiers(seat.device_fd, monitor.mode.hdisplay, monitor.mode.vdisplay, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifiers, &framebuffer_handle, DRM_MODE_FB_MODIFIERS))
+			if (drmModeAddFB2WithModifiers(seat.device_fd, monitor.mode.hdisplay, monitor.mode.vdisplay, render.ultra_formats[0].drm_format,
+					handles, pitches, offsets, modifiers, &framebuffer_handle, DRM_MODE_FB_MODIFIERS))
 				MQ_XERRNO("Failed to create framebuffer");
 
 			frames.push_back(Frame {

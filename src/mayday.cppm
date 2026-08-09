@@ -2,6 +2,7 @@ module;
 #include <libudev.h>
 #include <mayday/libseat.h>
 #include <mayquill/logger.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -39,8 +40,8 @@ export class Mayday : public Reality {
 	mayquill::Server server;
 
 	Mayday() : Reality {
-		.render = get_shit(),
-	} {
+				   .render = get_shit(),
+			   } {
 
 		//* LIBSEAT *//
 		libseat_seat_listener listener = {
@@ -66,6 +67,11 @@ export class Mayday : public Reality {
 		seat.device_id = libseat_open_device(seat.seat, "/dev/dri/card0", &seat.device_fd);
 		if (seat.device_id == -1)
 			MQ_XERRNO("Failed to open device");
+		// https://labex.io/lesson/device-types
+		struct stat info {};
+		if (fstat(seat.device_fd, &info) == -1)
+			MQ_XERRNO("Failed to stat device fd");
+		seat.rdev = info.st_rdev;
 
 		//* UDEV *//
 		// Udev 'context', essentially, the handle to udev
@@ -103,8 +109,8 @@ export class Mayday : public Reality {
 
 		regenerate_monitors();
 
-        //* SERVER *//
-        server.reference = static_cast<Reality*>(this);
+		//* SERVER *//
+		server.reference = static_cast<Reality*>(this);
 		server.bind_socket();
 	}
 

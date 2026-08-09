@@ -19,6 +19,7 @@ export struct Seat {
 	int seat_fd;
 	int device_id;
 	int device_fd;
+	dev_t rdev;
 };
 
 export struct Udev {
@@ -99,4 +100,7 @@ export class Reality {
 	// To operate on free_pools, basically a pool of pools
 	Command beg_pool(std::uint32_t buffer_count);
 	void donate_pool(Command&& command);
+
+    // General memory helper
+	std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, vk::MemoryRequirements memory_requirements, vk::MemoryPropertyFlagBits property_flags);
 };
