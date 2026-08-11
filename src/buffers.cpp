@@ -83,7 +83,7 @@ void WlShmPool::handle(Request request) {
 							   .initialLayout = vk::ImageLayout::eUndefined,
 						   });
 						   auto requirements = image.getMemoryRequirements();
-						   auto memory_type_index = reality.get_memory_type_index(*reality.render.physical_device, requirements, vk::MemoryPropertyFlagBits::eDeviceLocal);
+						   auto memory_type_index = reality.get_memory_type_index(*reality.render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 						   if (!memory_type_index.has_value())
 							   MQ_XERROR("No appropriate image memory found");
 						   vk::MemoryAllocateInfo allocation_info = {
@@ -203,12 +203,12 @@ struct DmabufParams {
 	std::vector<Plane> planes;
 };
 
-/*  Send format table - packed vector of (format, modifier)
+/*  Send format table - packed vector of (format, modifier). Formats will repeat, for each modifier they have
  *  Send main device - default device
  *  for every device
  *      send tranche target deivce - device this tranche relates to
  *      send tranche flags - if we're going to direct scanout or sample
- *      send tranche formats - packed u16 indexes indexing into format table
+ *      send tranche formats - packed u16 indexes indexing into format table, saying which this device supports
  *      tranch done - reset target
  *  rof
  */
@@ -274,8 +274,147 @@ void ZwpLinuxDmabufV1::handle(Request request) {
 		request);
 }
 
+void handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std::uint32_t drm_format, std::vector<Plane> planes) {
+	// Sort by plane index
+	std::ranges::sort(planes, std::ranges::less {}, &Plane::plane_index);
+	std::vector<vk::SubresourceLayout> plane_layouts;
+	plane_layouts.reserve(planes.size());
+
+	for (int i = 0; i < planes.size(); ++i) {
+		plane_layouts.push_back(vk::SubresourceLayout {
+			.offset = planes[i].offset,
+			.rowPitch = planes[i].pitch,
+		});
+	}
+
+	auto& reality = gimme_reality(client);
+	auto it = std::ranges::find_if(reality.render.ultra_formats, [drm_format](const UltraFormat& format) { return format.drm_format == drm_format; });
+	if (it == reality.render.ultra_formats.end())
+		MQ_XERROR("Unable to find matching ultra format for drm format");
+	auto& ultra_format = *it;
+
+	// The structure type is 'specialised' on the first type you provide it. Types such as imagecreateinfo define other types that can go in their pnext.
+	// The chain will automatically fill the pnext chain to include the image drm format shit and the external memory image shit for us
+	vk::StructureChain<vk::ImageCreateInfo, vk::ImageDrmFormatModifierExplicitCreateInfoEXT, vk::ExternalMemoryImageCreateInfo> image_chain = {
+		vk::ImageCreateInfo {
+			.flags = vk::ImageCreateFlagBits::eDisjoint, // The backing memory for each memory plane may be on different fds, we'll need to bind multiple memories
+			.imageType = vk::ImageType::e2D,
+			.format = ultra_format.vk_format,
+			.extent = {
+				.width = static_cast<std::uint32_t>(width),
+				.height = static_cast<std::uint32_t>(height),
+				.depth = 1,
+			},
+			.mipLevels = 1,
+			.arrayLayers = 1,
+			.samples = vk::SampleCountFlagBits::e1,
+			.tiling = vk::ImageTiling::eDrmFormatModifierEXT, // Modifier & memory planes provided in pnext
+			.usage = vk::ImageUsageFlagBits::eSampled,
+			.sharingMode = vk::SharingMode::eExclusive,
+			.initialLayout = vk::ImageLayout::eUndefined,
+		},
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkImageDrmFormatModifierExplicitCreateInfoEXT.html
+		// Vulkan must use this specific modifier, and plane layouts, we are not negotiating, we're telling vulkan it must use this (importing path)
+		vk::ImageDrmFormatModifierExplicitCreateInfoEXT {
+			// The modifier across all planes is the same, I'm unsure why we need to specify the number of planes, because the modifier already will specify the number of planes
+			// it expects internally. Perhaps just a sanity check? The spec on that link even specifies that it must be equal to what it expects
+			.drmFormatModifier = planes[0].modifier,
+			.drmFormatModifierPlaneCount = static_cast<std::uint32_t>(plane_layouts.size()),
+            // The offset tells the image to offset bound memory to that point, ie. 20 offset would mean the start is 20 bytes into the memory
+            // We're using the offset from the fd as seen above. We could instead bind the memory at an offset, but we need to specify pitch anyways here so it's just easier
+			.pPlaneLayouts = plane_layouts.data(),
+		},
+		// The image's memory will be from a dmabuf fd
+		vk::ExternalMemoryImageCreateInfo {
+			.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
+		},
+	};
+
+	vk::raii::Image image = reality.render.device.createImage(image_chain.get<vk::ImageCreateInfo>());
+	static constexpr vk::ImageAspectFlagBits memory_planes[4] = {
+		vk::ImageAspectFlagBits::eMemoryPlane0EXT,
+		vk::ImageAspectFlagBits::eMemoryPlane1EXT,
+		vk::ImageAspectFlagBits::eMemoryPlane2EXT,
+		vk::ImageAspectFlagBits::eMemoryPlane3EXT,
+	};
+
+	// Create the multiple memories, and bind the fds to them
+	std::vector<vk::raii::DeviceMemory> plane_proxy_memories;
+	plane_proxy_memories.reserve(plane_layouts.size());
+	std::vector<vk::BindImagePlaneMemoryInfo> memory_plane_bind_infos;
+	memory_plane_bind_infos.reserve(plane_layouts.size());
+	std::vector<vk::BindImageMemoryInfo> memory_bind_infos;
+	memory_bind_infos.reserve(plane_layouts.size());
+	for (int i = 0; i < plane_layouts.size(); ++i) {
+		// Specify we want the requirements of the image, but just for that plane
+		vk::StructureChain<vk::ImageMemoryRequirementsInfo2, vk::ImagePlaneMemoryRequirementsInfo> memory_chain = {
+			vk::ImageMemoryRequirementsInfo2 {
+				.image = image,
+			},
+			vk::ImagePlaneMemoryRequirementsInfo {
+				.planeAspect = memory_planes[i],
+			},
+		};
+
+		// Get the requirements of both the image plane, and the fd we're importing
+		auto memory_requirements = reality.render.device.getImageMemoryRequirements2(memory_chain.get<vk::ImageMemoryRequirementsInfo2>());
+		// https://docs.vulkan.org/refpages/latest/refpages/source/vkGetMemoryFdPropertiesKHR.html
+		auto fd_properties = reality.render.device.getMemoryFdPropertiesKHR(vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT, planes[i].fd);
+		std::uint32_t compatible_memory_types = memory_requirements.memoryRequirements.memoryTypeBits & fd_properties.memoryTypeBits;
+
+		vk::StructureChain<vk::MemoryAllocateInfo, vk::ImportMemoryFdInfoKHR> allocation_chain = {
+			vk::MemoryAllocateInfo {
+				.allocationSize = memory_requirements.memoryRequirements.size,
+				// You're probably wondering why we are even needing to provide a memory type, given the FD is already in memory. It's because we're not actually
+                // allocating memory, as you can see below obviously, we're specifying the imported memory, but also the memory type is just a mask which limits
+                // what access we have to the memory / provides additional details. Vulkan is unaware of what we're "allowed" to do with the memory, so we a valid mask
+                // Crucially, multiple memory types can point to the same underlying memory, just with different controls on what we're allowed to do
+				.memoryTypeIndex = *reality.get_memory_type_index(*reality.render.physical_device, compatible_memory_types, vk::MemoryPropertyFlags {}),
+			},
+			vk::ImportMemoryFdInfoKHR {
+				.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
+				.fd = planes[i].fd,
+			}};
+
+		plane_proxy_memories.push_back(reality.render.device.allocateMemory(allocation_chain.get<vk::MemoryAllocateInfo>()));
+
+        // Specify the plane we're binding to in this extension: https://docs.vulkan.org/refpages/latest/refpages/source/VkBindImagePlaneMemoryInfo.html
+		memory_plane_bind_infos.push_back(vk::BindImagePlaneMemoryInfo {
+			.planeAspect = memory_planes[i],
+		});
+        // https://docs.vulkan.org/refpages/latest/refpages/source/VkBindImageMemoryInfo.html
+		memory_bind_infos.push_back(vk::BindImageMemoryInfo {
+			.pNext = &memory_plane_bind_infos[i],
+			.image = image,
+			.memory = plane_proxy_memories[i],
+            // We specify the offset in the image for each plane. Theoretically, I think we could also set it here,
+            // then remove it from the fd offset from the plane, but we need pPlaneLayout anyway for the plane pitches so it's pointless
+			.memoryOffset = 0,
+		});
+	}
+
+    // Notice we aren't using image.bindMemory(), hence the different BindImageMemoryInfo signature
+	reality.render.device.bindImageMemory2(memory_bind_infos);
+
+	vk::ImageViewCreateInfo image_view_info = {
+		.image = image,
+		.viewType = vk::ImageViewType::e2D,
+		.format = ultra_format.vk_format,
+		.components = ultra_format.vk_swizzed,
+		.subresourceRange = {
+			.aspectMask = vk::ImageAspectFlagBits::eColor,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
+	auto image_view = reality.render.device.createImageView(image_view_info);
+}
+
 void ZwpLinuxBufferParamsV1::handle(Request request) {
 	auto& data = gimme_data<DmabufParams>(user_data);
+
 	std::visit(overload {
 				   [this, &data](Add& request) {
 					   data.planes.push_back(Plane {

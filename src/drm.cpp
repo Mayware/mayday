@@ -84,7 +84,7 @@ struct DrmMonitor {
 	std::uint32_t encoder_handle;
 	std::uint32_t crtc_handle;
 	std::uint32_t plane_handle;
-	drmModeModeInfo mode;
+	drmModeModeInfo mode; // Notice how mode isn't a handle, it' just a struct representing the values, we can arbitrary modify it if we want to
 };
 
 // This is an explicit no-op, if the monitors aren't actually different to what the connector scan on the device_fd shows. Only changed monitors are regenerated

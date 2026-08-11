@@ -70,16 +70,17 @@ void Reality::donate_pool(Command&& command) {
 	render.free_pools.push_back(std::move(command));
 }
 
-std::optional<std::uint32_t> Reality::get_memory_type_index(vk::PhysicalDevice physical_device, vk::MemoryRequirements memory_requirements, vk::MemoryPropertyFlagBits property_flags) {
+// base_requirements is the memoryTypeBits you get from the image requirements. These are the base requirements for the image
+// extended requirements are the additional memory property flags you want. These aren't native to the image (ie. the image doesn't care about device local memory), they're additional reqs you want
+std::optional<std::uint32_t> Reality::get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements) {
 	auto memory_properties = physical_device.getMemoryProperties();
-	std::uint32_t memory_type_index = std::numeric_limits<std::uint32_t>::max();
 	for (int i = 0; i < memory_properties.memoryTypeCount; ++i) {
-		// memoryTypeBits is a bitmask representing memory_properties.memoryTypes indices
+		// memoryTypeBits (base_requirements) is a bitmask representing memory_properties.memoryTypes indices
 		// eg 1011 means the 1st, 3rd, and 4th memoryTypes are compatible.
-		if ((memory_requirements.memoryTypeBits & (1u << i)) != 0 &&
+		if ((base_requirements & (1u << i)) != 0 &&
 			// Ensure all property flags (like being device local) are satisfied
-			(memory_properties.memoryTypes[i].propertyFlags & property_flags) == property_flags) {
-			return memory_type_index;
+			(memory_properties.memoryTypes[i].propertyFlags & extended_requirements) == extended_requirements) {
+            return i;
 		}
 	}
     return std::nullopt;

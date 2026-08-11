@@ -137,6 +137,8 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 	for (auto modifier : base_format.drm_modifiers) {
 		drm_modifiers_ids.push_back(modifier.drmFormatModifier);
 	}
+    // https://docs.vulkan.org/refpages/latest/refpages/source/VkImageDrmFormatModifierListCreateInfoEXT.html (allocation path)
+    // Vulkan picks the plane layouts & modifiers, from the options we provide here (layouts are implicit), ie. we are negotiating and vulkan will tell us after what it picked
 	vk::ImageDrmFormatModifierListCreateInfoEXT potential_modifiers_info = {
 		.drmFormatModifierCount = static_cast<std::uint32_t>(drm_modifiers_ids.size()),
 		.pDrmFormatModifiers = drm_modifiers_ids.data(),
@@ -215,7 +217,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 
 		// Allocate the memory
         auto requirements = image.getMemoryRequirements();
-        auto memory_type_index = get_memory_type_index(*render.physical_device, requirements, vk::MemoryPropertyFlagBits::eDeviceLocal);
+        auto memory_type_index = get_memory_type_index(*render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
         if (!memory_type_index.has_value())
 			MQ_XERROR("No appropriate image memory found");
 

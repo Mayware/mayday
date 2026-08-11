@@ -136,7 +136,7 @@ class WlSurfaceData {
 			delta.slave_deltas.push_back(&rear_delta);
 		}
 
-		// Start the dmabuf / shm upload
+		// Start the dmabuf / shm upload, on commit
 		if (delta.buffer.buffer and *delta.buffer.buffer) {
 			auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer.buffer));
 			// The lock indicates that the uploader is not yet finished, it's automatically dropped at scope end
