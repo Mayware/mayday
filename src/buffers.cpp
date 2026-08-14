@@ -170,8 +170,10 @@ void WlShmPool::handle(Request request) {
 							   },
 						   });
 
+						   std::vector<vk::raii::DeviceMemory> memories;
+						   memories.push_back(std::move(image_memory));
 						   return WlBufferDataInner {
-							   .memory = std::move(image_memory),
+							   .memories = std::move(memories),
 							   .image = std::move(image),
 							   .image_view = std::move(image_view),
 						   };
@@ -274,7 +276,7 @@ void ZwpLinuxDmabufV1::handle(Request request) {
 		request);
 }
 
-void handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std::uint32_t drm_format, std::vector<Plane> planes) {
+WlBufferDataInner handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std::uint32_t drm_format, std::vector<Plane> planes) {
 	// Sort by plane index
 	std::ranges::sort(planes, std::ranges::less {}, &Plane::plane_index);
 	std::vector<vk::SubresourceLayout> plane_layouts;
@@ -320,8 +322,8 @@ void handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std:
 			// it expects internally. Perhaps just a sanity check? The spec on that link even specifies that it must be equal to what it expects
 			.drmFormatModifier = planes[0].modifier,
 			.drmFormatModifierPlaneCount = static_cast<std::uint32_t>(plane_layouts.size()),
-            // The offset tells the image to offset bound memory to that point, ie. 20 offset would mean the start is 20 bytes into the memory
-            // We're using the offset from the fd as seen above. We could instead bind the memory at an offset, but we need to specify pitch anyways here so it's just easier
+			// The offset tells the image to offset bound memory to that point, ie. 20 offset would mean the start is 20 bytes into the memory
+			// We're using the offset from the fd as seen above. We could instead bind the memory at an offset, but we need to specify pitch anyways here so it's just easier
 			.pPlaneLayouts = plane_layouts.data(),
 		},
 		// The image's memory will be from a dmabuf fd
@@ -366,9 +368,9 @@ void handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std:
 			vk::MemoryAllocateInfo {
 				.allocationSize = memory_requirements.memoryRequirements.size,
 				// You're probably wondering why we are even needing to provide a memory type, given the FD is already in memory. It's because we're not actually
-                // allocating memory, as you can see below obviously, we're specifying the imported memory, but also the memory type is just a mask which limits
-                // what access we have to the memory / provides additional details. Vulkan is unaware of what we're "allowed" to do with the memory, so we a valid mask
-                // Crucially, multiple memory types can point to the same underlying memory, just with different controls on what we're allowed to do
+				// allocating memory, as you can see below obviously, we're specifying the imported memory, but also the memory type is just a mask which limits
+				// what access we have to the memory / provides additional details. Vulkan is unaware of what we're "allowed" to do with the memory, so we a valid mask
+				// Crucially, multiple memory types can point to the same underlying memory, just with different controls on what we're allowed to do
 				.memoryTypeIndex = *reality.get_memory_type_index(*reality.render.physical_device, compatible_memory_types, vk::MemoryPropertyFlags {}),
 			},
 			vk::ImportMemoryFdInfoKHR {
@@ -378,22 +380,22 @@ void handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std:
 
 		plane_proxy_memories.push_back(reality.render.device.allocateMemory(allocation_chain.get<vk::MemoryAllocateInfo>()));
 
-        // Specify the plane we're binding to in this extension: https://docs.vulkan.org/refpages/latest/refpages/source/VkBindImagePlaneMemoryInfo.html
+		// Specify the plane we're binding to in this extension: https://docs.vulkan.org/refpages/latest/refpages/source/VkBindImagePlaneMemoryInfo.html
 		memory_plane_bind_infos.push_back(vk::BindImagePlaneMemoryInfo {
 			.planeAspect = memory_planes[i],
 		});
-        // https://docs.vulkan.org/refpages/latest/refpages/source/VkBindImageMemoryInfo.html
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkBindImageMemoryInfo.html
 		memory_bind_infos.push_back(vk::BindImageMemoryInfo {
 			.pNext = &memory_plane_bind_infos[i],
 			.image = image,
 			.memory = plane_proxy_memories[i],
-            // We specify the offset in the image for each plane. Theoretically, I think we could also set it here,
-            // then remove it from the fd offset from the plane, but we need pPlaneLayout anyway for the plane pitches so it's pointless
+			// We specify the offset in the image for each plane. Theoretically, I think we could also set it here,
+			// then remove it from the fd offset from the plane, but we need pPlaneLayout anyway for the plane pitches so it's pointless
 			.memoryOffset = 0,
 		});
 	}
 
-    // Notice we aren't using image.bindMemory(), hence the different BindImageMemoryInfo signature
+	// Notice we aren't using image.bindMemory(), hence the different BindImageMemoryInfo signature
 	reality.render.device.bindImageMemory2(memory_bind_infos);
 
 	vk::ImageViewCreateInfo image_view_info = {
@@ -410,6 +412,12 @@ void handle_dmabuf(Client& client, std::int32_t width, std::int32_t height, std:
 		},
 	};
 	auto image_view = reality.render.device.createImageView(image_view_info);
+
+	return WlBufferDataInner {
+		.memories = std::move(plane_proxy_memories),
+		.image = std::move(image),
+		.image_view = std::move(image_view),
+	};
 }
 
 void ZwpLinuxBufferParamsV1::handle(Request request) {
@@ -425,8 +433,29 @@ void ZwpLinuxBufferParamsV1::handle(Request request) {
 						   .modifier = combine_u32s(request.modifier_hi, request.modifier_lo),
 					   });
 				   },
-				   [this](Create& request) {},
-				   [this](CreateImmed& request) {},
+				   [this, &data](Create& request) {
+					   std::optional<WlBufferDataInner> inner;
+					   try {
+						   inner = handle_dmabuf(client, request.width, request.height, request.format, std::move(data.planes));
+					   } catch (std::exception& e) {
+						   MQ_ERROR("{}", e.what());
+						   failed();
+						   return;
+					   }
+					   auto buffer = client.add_object<WlBuffer>(client.next_id(), std::make_unique<WlBufferData>(std::move(*inner)));
+					   created(buffer.key.id);
+				   },
+				   [this, &data](CreateImmed& request) {
+					   std::optional<WlBufferDataInner> inner;
+					   try {
+						   inner = handle_dmabuf(client, request.width, request.height, request.format, std::move(data.planes));
+					   } catch (std::exception& e) {
+						   MQ_ERROR("{}", e.what());
+						   client.error(keyd.id, ZwpLinuxBufferParamsV1::ErrorEnum::InvalidWlBuffer, std::format("Failed to import: {}", e.what()));
+						   return;
+					   }
+					   auto buffer = client.add_object<WlBuffer>(request.buffer_id, std::make_unique<WlBufferData>(std::move(*inner)));
+				   },
 				   [this](SetSamplingDevice& request) {},
 				   [this](Destroy& request) {},
 			   },

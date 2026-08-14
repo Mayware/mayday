@@ -4,18 +4,28 @@ import vulkan;
 
 namespace mayquill {
 struct WlBufferDataInner {
-	std::optional<vk::raii::DeviceMemory> memory;
+	std::vector<vk::raii::DeviceMemory> memories;
 	vk::raii::Image image;
 	vk::raii::ImageView image_view;
 };
 
-class WlBufferData {
-  public:
+struct ThreadedUpload {
 	std::mutex lock;
 	std::function<WlBufferDataInner()> kicker;
-	std::optional<WlBufferDataInner> inner;
-    std::jthread uploader;
+	std::jthread uploader; // Kept, solely so the destructor yields for the thread
 
-	WlBufferData(std::function<WlBufferDataInner()> kicker) : kicker(std::move(kicker)) {}
+	ThreadedUpload(std::function<WlBufferDataInner()> kicker) : kicker(std::move(kicker)) {}
+};
+
+class WlBufferData {
+  public:
+	std::optional<ThreadedUpload> threaded_upload;
+	std::optional<WlBufferDataInner> inner;
+
+    // Constructor for a lambda (ie. shm)
+	WlBufferData(std::function<WlBufferDataInner()> kicker) : threaded_upload(std::move(kicker)) {}
+
+    // Constructor for immediate data (ie. dambuf)
+	WlBufferData(WlBufferDataInner inner) : inner(std::move(inner)) {}
 };
 } // namespace mayquill

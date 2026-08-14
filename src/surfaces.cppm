@@ -111,12 +111,12 @@ class WlSurfaceData {
 		role = std::nullopt;
 	}
 
-    /*  The way the model works is that (Sub)Surfaces have a queue of committed deltas, waiting to be applied to real state
-     *  When a (Sub)Surface commits a delta, its "claims" the last already-committed delta of all of its child subsurfaces, storing it in a vector of "slave deltas"
-     *  When that delta wants to be applied, ALL of its slave deltas must be applied simultaneously, and hence, must also be able to apply
-     *  Applying deltas is a no-op for any effectively synchronised subsurface, only their desynchronised parent that slaved their commits will apply them, when it wants to apply its own
-     *  Of course, could've made it not be a no-op and make the caller only call apply_deltas if it is an effectively desync (sub)surface, but this just means that calling code can be generic
-     */
+	/*  The way the model works is that (Sub)Surfaces have a queue of committed deltas, waiting to be applied to real state
+	 *  When a (Sub)Surface commits a delta, its "claims" the last already-committed delta of all of its child subsurfaces, storing it in a vector of "slave deltas"
+	 *  When that delta wants to be applied, ALL of its slave deltas must be applied simultaneously, and hence, must also be able to apply
+	 *  Applying deltas is a no-op for any effectively synchronised subsurface, only their desynchronised parent that slaved their commits will apply them, when it wants to apply its own
+	 *  Of course, could've made it not be a no-op and make the caller only call apply_deltas if it is an effectively desync (sub)surface, but this just means that calling code can be generic
+	 */
 	void commit_pending_delta() {
 		// Claim the last committed delta of our children
 		for (auto& subsurface_key : children) {
@@ -136,22 +136,18 @@ class WlSurfaceData {
 			delta.slave_deltas.push_back(&rear_delta);
 		}
 
-		// Start the dmabuf / shm upload, on commit
 		if (delta.buffer.buffer and *delta.buffer.buffer) {
 			auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer.buffer));
-			// The lock indicates that the uploader is not yet finished, it's automatically dropped at scope end
-			std::unique_lock locked(data.lock);
-			// jthread automatically .joins() on destruction
-			data.uploader = std::jthread([&data, acquire_point = &delta.buffer.acquire_point, locked = std::move(locked)]() {
-                // Yield for the acquire point, if it exists
-				if (acquire_point) {
-					auto& point = *acquire_point;
-					// 1 means we only have one timeline handle, -1 means yield infinitely, 2nd 0 is flags, 3rd 0 is a pointer to write which
-					// timeline signalled first and broke the wait (we aren't waiting, nor do we have multiple timelines). 0 means it is ready (ie. timeline past or on that point)
-					drmSyncobjTimelineWait(point->timeline_data.get()->device_fd, &point->timeline_data.get()->handle, &point->point, 1, -1, 0, nullptr);
-				}
-				data.inner = data.kicker();
-			});
+            // Only the shm path is sets the optional, threaded_upload. Dmabuf is uploaded immediately already
+			if (data.threaded_upload) {
+				auto& upload = *data.threaded_upload;
+				// The lock indicates that the uploader is not yet finished, it's automatically dropped at scope end
+				std::unique_lock locked(upload.lock);
+				// jthread automatically .joins() on destruction
+				upload.uploader = std::jthread([&data, locked = std::move(locked), &upload]() {
+					data.inner = upload.kicker();
+				});
+			}
 		}
 
 		committed_deltas.push_back(std::move(delta));
@@ -160,10 +156,10 @@ class WlSurfaceData {
 		std::construct_at(&delta, *this); // Construct at just forwards the args
 	}
 
-    // Checks if all deltas upto delta X in the commited queue can be applied
-    // This is recursive, as slaves will check their slaves too
+	// Checks if all deltas upto delta X in the commited queue can be applied
+	// This is recursive, as slaves will check their slaves too
 	bool can_apply_deltas(WlSurfaceDelta* limit) {
-        // Pretends to be the "real" state
+		// Pretends to be the "real" state
 		bool accumulated_set_barrier = fifo_set_barrier;
 		for (auto& front : committed_deltas) {
 
@@ -175,14 +171,29 @@ class WlSurfaceData {
 			if (front.commit_timestamp && std::chrono::steady_clock::now() < *front.commit_timestamp)
 				return false;
 
-            // Check if the buffer has been uploaded to the GPU (this indirectly also checks acquire point)
+			// Check if the buffer has been uploaded to the GPU (this indirectly also checks acquire point)
 			if (front.buffer.buffer && *front.buffer.buffer) {
-				auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer.buffer));
-				// Mutex is currently locked, ie. uploader is still uploading and hasn't released, can't apply
-				if (!data.lock.try_lock())
-					return false;
+				auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**front.buffer.buffer));
+				// Shm path
+				if (data.threaded_upload) {
+					// Mutex is currently locked, ie. uploader is still uploading and hasn't released, can't apply
+					if (!(*data.threaded_upload).lock.try_lock())
+						return false;
+				} else {
+					// Dmabuf path, yield for the acquire point, if it exists
+					if (front.buffer.acquire_point) {
+						auto& point = *buffer.acquire_point;
+						// 1 means we only have one timeline handle, -1 means yield infinitely, 2nd 0 is flags, 3rd 0 is a pointer to write which
+						// timeline signalled first and broke the wait (we aren't waiting, nor do we have multiple timelines). 0 means it is ready (ie. timeline past or on that point)
+						if (drmSyncobjTimelineWait(point.timeline_data.get()->device_fd, &point.timeline_data.get()->handle, &point.point, 1, 0, 0, nullptr))
+							return false;
+					} else {
+                        // Implicit sync path
+                    }
+				}
 			}
-            // Keep updating the "real" state
+
+			// Keep updating the "real" state
 			accumulated_set_barrier |= front.fifo_set_barrier;
 
 			for (auto& slave_delta : front.slave_deltas) {
@@ -196,11 +207,11 @@ class WlSurfaceData {
 		return true;
 	}
 
-    // Applies all deltas to the real state, upto delta X in the commited queue
-    // Limit is only set when parents are trying to get children's slaved deltas to commit
+	// Applies all deltas to the real state, upto delta X in the commited queue
+	// Limit is only set when parents are trying to get children's slaved deltas to commit
 	void apply_committed_deltas(WlSurfaceDelta* limit = nullptr) {
 		// If limit is set, the parent wants the child subsurface to commit, so we can skip the check
-        // Else, we'll only make it out of this check if the subsurface is effectively desynchronised
+		// Else, we'll only make it out of this check if the subsurface is effectively desynchronised
 		if (!limit && is_role<WlSubsurface>()) {
 			Key last_key = *role;
 			bool is_synchronised = false;
@@ -232,7 +243,7 @@ class WlSurfaceData {
 		while (committed_deltas.size() > 0) {
 			auto& front = committed_deltas.front();
 
-            // Check our front delta, one at a time
+			// Check our front delta, one at a time
 			if (!can_apply_deltas(&front))
 				break;
 
