@@ -539,6 +539,75 @@ Render Mayday::get_shit() {
 		.lineWidth = 1.0f,
 	};
 
+	vk::SemaphoreTypeCreateInfo semaphore_info = {
+		.semaphoreType = vk::SemaphoreType::eTimeline,
+		.initialValue = 0,
+	};
+
+	auto semaphore = device.createSemaphore(vk::SemaphoreCreateInfo {.pNext = &semaphore_info});
+
+	// Create sampler + resource heaps
+	auto create_heap_buffer = [&device, &physical_device](std::uint64_t size) -> HeapBuffer {
+		// Buffer for descriptor heap
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferCreateInfo.html
+		// https://docs.vulkan.org/spec/latest/chapters/resources.html - What counts as a resource (basically, buffers, images)
+		// basically, a resource is the underlying data. Samplers are not resources, hence their own heap since they aren't actually data in the same sense
+        // of an image, but rather, just configuration more like what an image view is.
+		auto buffer = device.createBuffer(vk::BufferCreateInfo {
+			.size = size,
+			.usage = vk::BufferUsageFlagBits::eDescriptorHeapEXT | vk::BufferUsageFlagBits::eShaderDeviceAddress, // 2nd one lets us get the address of the buffer, which we can then use directly in shaders
+		});
+		auto requirements = buffer.getMemoryRequirements();
+		auto memory_type_index = get_memory_type_index(*physical_device, requirements.memoryTypeBits,
+			// Host coherent means that it automatically flushes after we write on the CPU side
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal);
+		if (!memory_type_index.has_value())
+			MQ_XERROR("No appropriate image memory found");
+
+		vk::StructureChain<vk::MemoryAllocateInfo, vk::MemoryAllocateFlagsInfo> chain = {
+			{
+				.allocationSize = requirements.size,
+				.memoryTypeIndex = *memory_type_index,
+			},
+			{
+				// eDeviceAddress specifies this memory can be attached to a buffer created with the eShaderDeviceAddress usage bit
+				.flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+			},
+		};
+
+		auto memory = device.allocateMemory(chain.get<vk::MemoryAllocateInfo>());
+		buffer.bindMemory(memory, 0);
+		auto buffer_address = device.getBufferAddress(vk::BufferDeviceAddressInfo {.buffer = buffer});
+		std::byte* mapped = static_cast<std::byte*>(memory.mapMemory(0, requirements.size)); // Map it into our process memory
+        // Remember, when using this buffer, the lowest address is actually mapped + reserved_size, not just mapped
+
+		return HeapBuffer {
+			.memory = std::move(memory),
+			.buffer_address = std::move(buffer_address),
+			.mapped = std::move(mapped),
+			.buffer = std::move(buffer),
+		};
+	};
+
+	vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties;
+	vk::PhysicalDeviceProperties2 physical_device_info = {.pNext = &heap_properties};
+	physical_device.getProperties2(&physical_device_info);
+
+	constexpr std::uint64_t max_images = 1024;
+	// The driver requires a reserved memory range in each heap, for its own tracking of stuff. Hence, for whatever size we request, we just add that ReservedRange (i.e. the size it will steal from us)
+	// 32 bytes is because each image is 4 vertices, and each vertex is 8 bytes (2 float32s), hence 32 bytes.
+    // Also fyi, obviously we aren't actually writing the images into the heap, just a view of it into it (like a pointer, but image view).
+    // A sampler is a descriptor and lives entirely in the heap. But an image is not a descriptor, a descriptor for an image tells the gpu how to access the image, hence only its descriptor lives in the heap
+	auto resource_heap = create_heap_buffer(heap_properties.imageDescriptorSize * max_images + (32 * max_images) + heap_properties.minResourceHeapReservedRange);
+    resource_heap.reserved_size = heap_properties.minResourceHeapReservedRange;
+	auto sampler_heap = create_heap_buffer(heap_properties.samplerDescriptorSize * max_images + heap_properties.minSamplerHeapReservedRange);
+    sampler_heap.reserved_size = heap_properties.minSamplerHeapReservedRange;
+
+	vk::PipelineCreateFlags2CreateInfo flags_create_info = {
+		.pNext = &pipeline_rendering_info,
+		.flags = vk::PipelineCreateFlagBits2::eDescriptorHeapEXT,
+	};
+
 	/*  After running vkCmdDraw(image to render to), this is what the pipeline does (i.e. the pipeline stages), in order:
 	 *
 	 *  Input Assembler: Combines vertices inputted into primitives, such as triangles (or, strip triangles, etc)
@@ -555,7 +624,7 @@ Render Mayday::get_shit() {
 	auto graphics_pipeline = device.createGraphicsPipeline(
 		nullptr, // Optional cache to specify, otherwise shaders will need to be re-compiled, etc
 		vk::GraphicsPipelineCreateInfo {
-			.pNext = &pipeline_rendering_info, // It's in pnext, because this is a dynamic rendering extension
+			.pNext = &flags_create_info,
 			.stageCount = shader_stages.size(),
 			.pStages = shader_stages.data(),
 			.pVertexInputState = &vertex_input_info,
@@ -568,13 +637,6 @@ Render Mayday::get_shit() {
 			.layout = pipeline_layout,
 		});
 
-	vk::SemaphoreTypeCreateInfo semaphore_info = {
-		.semaphoreType = vk::SemaphoreType::eTimeline,
-		.initialValue = 0,
-	};
-
-	auto semaphore = device.createSemaphore(vk::SemaphoreCreateInfo {.pNext = &semaphore_info});
-
 	return {
 		.context = std::move(context),
 		.instance = std::move(instance),
@@ -585,6 +647,8 @@ Render Mayday::get_shit() {
 		.graphics_pipeline = std::move(graphics_pipeline),
 		.semaphore = std::move(semaphore),
 		.ultra_formats = std::move(ultra_formats),
+        .resource_heap = std::move(resource_heap),
+        .sampler_heap = std::move(sampler_heap),
 	};
 }
 
@@ -599,10 +663,10 @@ void Mayday::render_monitor(Monitor& monitor) {
 	});
 
 	// https://youtu.be/GiKbGWI4M-Y?t=2046 https://www.khronos.org/blog/understanding-vulkan-synchronization. Essentially, memory barriers ensrue caches are flushed when relevant
-    // the src stage mask says that for every buffer / command before this barrier, yield until it passes that stage. dst access mask means that for every buffer / command after this barrier
-    // make it yield just before it starts the dst stage, then when the src stages are complete, let it continue.
-    // Eg. src mask: fragment shader, dst mask: colour attachment; do not allow commands after this barrier to pass colour attachment stage, until commands before it have passed their fragment shader stages
-    // It applies to all in flight buffers, before and after
+	// the src stage mask says that for every buffer / command before this barrier, yield until it passes that stage. dst access mask means that for every buffer / command after this barrier
+	// make it yield just before it starts the dst stage, then when the src stages are complete, let it continue.
+	// Eg. src mask: fragment shader, dst mask: colour attachment; do not allow commands after this barrier to pass colour attachment stage, until commands before it have passed their fragment shader stages
+	// It applies to all in flight buffers, before and after
 	vk::ImageMemoryBarrier2 image_barrier = {
 		.srcStageMask = vk::PipelineStageFlagBits2::eNone,
 		.srcAccessMask = vk::AccessFlagBits2::eNone,
@@ -610,7 +674,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 		.dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
 		.oldLayout = vk::ImageLayout::eUndefined,
 		.newLayout = vk::ImageLayout::eAttachmentOptimal,
-        // We aren't changing what queue family we're using
+		// We aren't changing what queue family we're using
 		.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
 		.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
 		.image = *frame.image,
@@ -674,8 +738,8 @@ void Mayday::render_monitor(Monitor& monitor) {
 	//          0,0                      960,540
 	//  -1, 1           1, 1        0,1080   1920,1080
 	// Any vertices outside of NDC are clipped after we give gl_Position ((x, y, z, w), we clip to -w <= x <= w etc, then we divide through by w. Useful for perspective
-    // projection, but we're doing orthographic so the division doesn't mean anything to us, hence our w is one. If we set it to like 0.5, and x was 0.5, it woul clip x to 0.5,
-    // then 0.5/0.5 = 1, so scaling it back up to 1, it's a nice property of the division, if only partially clipped new vertices are made so it fits in NDC)
+	// projection, but we're doing orthographic so the division doesn't mean anything to us, hence our w is one. If we set it to like 0.5, and x was 0.5, it woul clip x to 0.5,
+	// then 0.5/0.5 = 1, so scaling it back up to 1, it's a nice property of the division, if only partially clipped new vertices are made so it fits in NDC)
 	// hence this satisfies the above render info promise (since our viewport size = render size, and NDC is just scaled up to viewport size)
 	// This operates on primitives. Good video on homogenous coordinates: https://www.youtube.com/watch?v=o-xwmTODTUI
 	command_buffer.setViewport(0,

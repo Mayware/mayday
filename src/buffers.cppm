@@ -8,7 +8,7 @@ struct WlBufferDataInner {
 	std::vector<int> plane_fds;
 	std::vector<vk::raii::DeviceMemory> memories;
 	vk::raii::Image image;
-	vk::raii::ImageView image_view;
+    UltraFormat ultra_format;
 };
 
 struct Shm {

@@ -152,33 +152,33 @@ void WlShmPool::handle(Request request) {
 					});
 
 					// Essentially a 'span' into our existing image, that lets us re-interpret it, and filter what we want from it
-					auto image_view = reality.render.device.createImageView(vk::ImageViewCreateInfo {
-						.image = image,
-						// You could interpret a 3d image as a 2d image with array layers
-						.viewType = vk::ImageViewType::e2D,
-						// The format is allowed to differ, (ie. reading R8G8B8A8Unorm as R8G8B8A8Srgb), if the format is compatible
-						.format = ultra_format.vk_format,
-						// The swizzle, ie. swapping colour channels
-						.components = ultra_format.vk_swizzed,
-						.subresourceRange = {
-							// If the image stores multiple data in one (eg.interleaved depth/stencil), we can pick just the data we want
-							// In our case, all our data is colour
-							.aspectMask = vk::ImageAspectFlagBits::eColor,
-							// MIP level 0 is the regular full-res image, so we choose mip level range from 0 to 1 (exclusive), so just 0
-							.baseMipLevel = 0,
-							.levelCount = 1,
-							// Same with array layers
-							.baseArrayLayer = 0,
-							.layerCount = 1,
-						},
-					});
+					// auto image_view = reality.render.device.createImageView(vk::ImageViewCreateInfo {
+					// 	.image = image,
+					// 	// You could interpret a 3d image as a 2d image with array layers
+					// 	.viewType = vk::ImageViewType::e2D,
+					// 	// The format is allowed to differ, (ie. reading R8G8B8A8Unorm as R8G8B8A8Srgb), if the format is compatible
+					// 	.format = ultra_format.vk_format,
+					// 	// The swizzle, ie. swapping colour channels
+					// 	.components = ultra_format.vk_swizzed,
+					// 	.subresourceRange = {
+					// 		// If the image stores multiple data in one (eg.interleaved depth/stencil), we can pick just the data we want
+					// 		// In our case, all our data is colour
+					// 		.aspectMask = vk::ImageAspectFlagBits::eColor,
+					// 		// MIP level 0 is the regular full-res image, so we choose mip level range from 0 to 1 (exclusive), so just 0
+					// 		.baseMipLevel = 0,
+					// 		.levelCount = 1,
+					// 		// Same with array layers
+					// 		.baseArrayLayer = 0,
+					// 		.layerCount = 1,
+					// 	},
+					// });
 
 					std::vector<vk::raii::DeviceMemory> memories;
 					memories.push_back(std::move(image_memory));
 					return WlBufferDataInner {
 						.memories = std::move(memories),
 						.image = std::move(image),
-						.image_view = std::move(image_view),
+						.ultra_format = std::move(ultra_format),
 					};
 				};
 				client.add_object<WlBuffer>(request.id, std::make_unique<WlBufferData>(std::move(create_shm)));
@@ -410,26 +410,11 @@ WlBufferDataInner handle_dmabuf(Client& client, std::int32_t width, std::int32_t
 	// Notice we aren't using image.bindMemory(), hence the different BindImageMemoryInfo signature
 	reality.render.device.bindImageMemory2(memory_bind_infos);
 
-	vk::ImageViewCreateInfo image_view_info = {
-		.image = image,
-		.viewType = vk::ImageViewType::e2D,
-		.format = ultra_format.vk_format,
-		.components = ultra_format.vk_swizzed,
-		.subresourceRange = {
-			.aspectMask = vk::ImageAspectFlagBits::eColor,
-			.baseMipLevel = 0,
-			.levelCount = 1,
-			.baseArrayLayer = 0,
-			.layerCount = 1,
-		},
-	};
-	auto image_view = reality.render.device.createImageView(image_view_info);
-
 	return WlBufferDataInner {
 		.plane_fds = std::move(plane_fds),
 		.memories = std::move(plane_proxy_memories),
 		.image = std::move(image),
-		.image_view = std::move(image_view),
+		.ultra_format = std::move(ultra_format),
 	};
 }
 

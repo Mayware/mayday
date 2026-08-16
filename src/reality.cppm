@@ -66,7 +66,7 @@ export struct Monitor {
 	drmModeModeInfo mode;
 	Command command;
 	std::vector<Frame> frames;
-    std::uint32_t current_frame = 0;
+	std::uint32_t current_frame = 0;
 };
 
 export struct UltraFormat {
@@ -76,7 +76,17 @@ export struct UltraFormat {
 	vk::ComponentMapping vk_swizzed;
 };
 
+export struct HeapBuffer {
+	vk::raii::DeviceMemory memory;
+	vk::DeviceAddress buffer_address;
+	vk::DeviceSize reserved_size;
+	std::byte* mapped;
+	vk::raii::Buffer buffer;
+};
+
 export struct Render {
+	std::vector<Command> free_pools;
+
 	vk::raii::Context context;
 	vk::raii::Instance instance;
 	vk::raii::PhysicalDevice physical_device;
@@ -86,9 +96,10 @@ export struct Render {
 	std::mutex queue_mutex;
 	vk::raii::Pipeline graphics_pipeline;
 	vk::raii::Semaphore semaphore;
-    std::uint64_t semaphore_value = 0;
+	std::uint64_t semaphore_value = 0;
 	std::vector<UltraFormat> ultra_formats;
-	std::vector<Command> free_pools;
+    HeapBuffer resource_heap;
+    HeapBuffer sampler_heap;
 };
 
 export class Reality {
@@ -104,6 +115,6 @@ export class Reality {
 
 	// General memory helper
 
-	std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
-    std::uint64_t increment_semaphore() { return render.semaphore_value++; }
+	static std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
+	std::uint64_t increment_semaphore() { return render.semaphore_value++; }
 };
