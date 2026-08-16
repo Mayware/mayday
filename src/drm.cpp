@@ -22,8 +22,14 @@ import std;
  *         Eg. the primary plane, overlay planes etc.
  *         Please note that memory planes are a different concept.
  *  CRTC: The overall display pipeline, it receives pixel data from the plane(s) and blends them together
- *        It sets the refresh rate / timing, etc. It continuously scans out the framebuffer, so if you
- *        modify the framebuffer, it will automatically be picked up.
+ *        It sets the refresh rate / timing, etc. The VSync marks the start of the CRTC scan out to the connecotr,
+ *        and when that finishes, the vblank starts which is just dead air time (and hence the time to swap out the framebuffer),
+ *        until we hit the next vsync where the CRTC again scans out the data to the connector.
+ *        Vsync -> CRTC Scan out to monitor (10ms) -> Vblank (6ms, swap framebuffer here) -> Vsync, so the vblank is just the dead
+ *        air as the CRTC didn't need the entire refresh budget to scan out. Monitors additionally "scan out" pixels line by line,
+ *        pixel by pixel, as they receive data from the crtc, so literally pixel by pixel they'll scan out. Theoretically a monitor
+ *        could wait to receive all pixel data, then swap all pixels at once, but that comes with latency costs obviously and the pixel
+ *        by pixel scanout usually isn't noticeable.
  *  Encoder: The connecting element between the CRTC (the overall pixel pipeline), and the connector.
  *           The CRTC feeds it pixel data, which is then converted to a suitable format for the connector.
  *           A historical relic - shouldn't really have been exposed to userspace.
@@ -384,4 +390,8 @@ void Mayday::regenerate_monitors() {
 	// std::move on a vector only marks the vector itself as an rvalue, getting a .begin() still gives T&
 	// std::vieww::as_rvalues also makes the it's rvalues too, so it does move the contents
 	monitors.append_range(new_monitors | std::views::as_rvalue);
+}
+
+void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle) {
+	auto& monitor = *std::ranges::find(monitors, crtc_handle, &Monitor::crtc_handle);
 }

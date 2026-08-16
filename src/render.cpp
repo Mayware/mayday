@@ -137,8 +137,8 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 	for (auto modifier : base_format.drm_modifiers) {
 		drm_modifiers_ids.push_back(modifier.drmFormatModifier);
 	}
-    // https://docs.vulkan.org/refpages/latest/refpages/source/VkImageDrmFormatModifierListCreateInfoEXT.html (allocation path)
-    // Vulkan picks the plane layouts & modifiers, from the options we provide here (layouts are implicit), ie. we are negotiating and vulkan will tell us after what it picked
+	// https://docs.vulkan.org/refpages/latest/refpages/source/VkImageDrmFormatModifierListCreateInfoEXT.html (allocation path)
+	// Vulkan picks the plane layouts & modifiers, from the options we provide here (layouts are implicit), ie. we are negotiating and vulkan will tell us after what it picked
 	vk::ImageDrmFormatModifierListCreateInfoEXT potential_modifiers_info = {
 		.drmFormatModifierCount = static_cast<std::uint32_t>(drm_modifiers_ids.size()),
 		.pDrmFormatModifiers = drm_modifiers_ids.data(),
@@ -216,9 +216,9 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		// The subresource then gives us the offset, size, rowPitch of that plane in memory
 
 		// Allocate the memory
-        auto requirements = image.getMemoryRequirements();
-        auto memory_type_index = get_memory_type_index(*render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-        if (!memory_type_index.has_value())
+		auto requirements = image.getMemoryRequirements();
+		auto memory_type_index = get_memory_type_index(*render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+		if (!memory_type_index.has_value())
 			MQ_XERROR("No appropriate image memory found");
 
 		// Make the memory exportable, as DRM will import it
@@ -588,111 +588,134 @@ Render Mayday::get_shit() {
 	};
 }
 
-// 	// Command buffers are the 'unit of work' on the gpu. When we are recording stuff into it, we're mainly setting metadata,
-// 	// only command buffers start in queue order between themselves, not stuff that was recorded within them.
-// 	command_buffer.begin(vk::CommandBufferBeginInfo {
-// 		.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-// 	});
+void Mayday::render_monitor(Monitor& monitor) {
+	auto& frame = monitor.frames[monitor.current_frame];
+	monitor.current_frame = (monitor.current_frame + 1) % monitor.frames.size();
+	auto& command_buffer = monitor.command.buffers[0];
+	// Command buffers are the 'unit of work' on the gpu. When we are recording stuff into it, we're mainly setting metadata,
+	// only command buffers start in queue order between themselves, not stuff that was recorded within them.
+	command_buffer.begin(vk::CommandBufferBeginInfo {
+		.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+	});
 
-// 	// There is no point of me explaining what a memory barrier is, I would do worse, than how elegantly this video does: https://youtu.be/GiKbGWI4M-Y?t=2046
-// 	// Trust me, watch it
-// 	// The layout just means the previous layout in memory we had, and the new layout means the new one we hint for it to take. This is because, the GPU
-// 	// may have one layout more efficient for reading, another for writing etc. The subresource range just specifies what miplevels/arraylayers we're transitioning
-// 	// in the image - the entire image needn't be transitioned.
-// 	vk::ImageMemoryBarrier2 image_barrier = {
-// 		.srcStageMask = vk::PipelineStageFlagBits2::eNone,
-// 		.srcAccessMask = vk::AccessFlagBits2::eNone,
-// 		.dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-// 		.dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-// 		.oldLayout = vk::ImageLayout::eUndefined,
-// 		.newLayout = vk::ImageLayout::eAttachmentOptimal,
-// 		.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-// 		.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-// 		.image = *image,
-// 		.subresourceRange = {
-// 			.aspectMask = vk::ImageAspectFlagBits::eColor,
-// 			.baseMipLevel = 0,
-// 			.levelCount = 1,
-// 			.baseArrayLayer = 0,
-// 			.layerCount = 1,
-// 		},
-// 	};
+	// https://youtu.be/GiKbGWI4M-Y?t=2046 https://www.khronos.org/blog/understanding-vulkan-synchronization. Essentially, memory barriers ensrue caches are flushed when relevant
+    // the src stage mask says that for every buffer / command before this barrier, yield until it passes that stage. dst access mask means that for every buffer / command after this barrier
+    // make it yield just before it starts the dst stage, then when the src stages are complete, let it continue.
+    // Eg. src mask: fragment shader, dst mask: colour attachment; do not allow commands after this barrier to pass colour attachment stage, until commands before it have passed their fragment shader stages
+    // It applies to all in flight buffers, before and after
+	vk::ImageMemoryBarrier2 image_barrier = {
+		.srcStageMask = vk::PipelineStageFlagBits2::eNone,
+		.srcAccessMask = vk::AccessFlagBits2::eNone,
+		.dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		.dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+		.oldLayout = vk::ImageLayout::eUndefined,
+		.newLayout = vk::ImageLayout::eAttachmentOptimal,
+        // We aren't changing what queue family we're using
+		.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+		.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+		.image = *frame.image,
+		.subresourceRange = {
+			.aspectMask = vk::ImageAspectFlagBits::eColor,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
 
-// 	// We didn't record anything before this, so it's not actually really doing anything other than ensuring we can write during the colour attachment output stage
-// 	command_buffer.pipelineBarrier2(vk::DependencyInfo {
-// 		.imageMemoryBarrierCount = 1,
-// 		.pImageMemoryBarriers = &image_barrier,
-// 	});
+	// We didn't record anything before this, so the barrier is only ensuring we can write during the colour attachment output stage
+	command_buffer.pipelineBarrier2(vk::DependencyInfo {
+		.imageMemoryBarrierCount = 1,
+		.pImageMemoryBarriers = &image_barrier,
+	});
 
-// 	// Colour output attachment info
-// 	vk::RenderingAttachmentInfo colour_attachment_info = {
-// 		.imageView = *image_view,
-// 		// What layout the image is in, at the colour attachment stage
-// 		// It does not do the transition, the memory barrier did that
-// 		.imageLayout = vk::ImageLayout::eAttachmentOptimal,
-// 		// Clear the image (within the render area, we set just below) with the clear colour on load, before draw
-// 		.loadOp = vk::AttachmentLoadOp::eClear,
-// 		// Keep the contents after rendering is done (we could set it to eDontCare, if it doesn't need to be valid)
-// 		.storeOp = vk::AttachmentStoreOp::eStore,
-// 		.clearValue = vk::ClearColorValue {
-// 			std::array {
-// 				0.5f,
-// 				0.5f,
-// 				0.5f,
-// 				0.1f,
-// 			}}};
+	// Colour output attachment info
+	vk::RenderingAttachmentInfo colour_attachment_info = {
+		.imageView = *frame.image_view,
+		// What layout the image is in, at the colour attachment stage
+		// It does not do the transition, the memory barrier did that
+		.imageLayout = vk::ImageLayout::eAttachmentOptimal,
+		// Clear the image (within the render area, we set just below) with the clear colour on load, before draw
+		.loadOp = vk::AttachmentLoadOp::eClear,
+		// Keep the contents after rendering is done (we could set it to eDontCare, if it doesn't need to be valid)
+		.storeOp = vk::AttachmentStoreOp::eStore,
+		.clearValue = vk::ClearColorValue {
+			std::array {
+				0.5f,
+				0.5f,
+				0.5f,
+				0.1f,
+			},
+		},
+	};
 
-// 	vk::Extent2D extent = {
-// 		.width = 1080, .height = 1080};
+	vk::Extent2D extent = {
+		.width = monitor.mode.hdisplay,
+		.height = monitor.mode.vdisplay,
+	};
 
-// 	vk::RenderingInfo rendering_info = {
-// 		.renderArea = {.offset = {
-// 						   .x = 0,
-// 						   .y = 0,
-// 					   },
-// 			.extent = extent},
-// 		// What layers the shader has access to (shaders default to the first layer)
-// 		.layerCount = 1,
-// 		.colorAttachmentCount = 1,
-// 		.pColorAttachments = &colour_attachment_info,
-// 	};
+	// What region of the image we'll be drawing to - it doesn't actually clip it for us, but it's a promise we
+	// make, to not render outside of that area
+	vk::RenderingInfo rendering_info = {
+		.renderArea = {
+			.offset = {
+				.x = 0,
+				.y = 0,
+			},
+			.extent = extent,
+		},
+		// What layers the shader has access to (shaders default to the first layer)
+		.layerCount = 1,
+		.colorAttachmentCount = 1,
+		.pColorAttachments = &colour_attachment_info,
+	};
+	// NDC conversion to framebuffer co-ordinates, ie. 0,0 NDC would be the centre, and 1,1 would be 1920x1080 on a 1080p monitor
+	//  -1,-1           1,-1        0,0         1920,0
+	//          0,0                      960,540
+	//  -1, 1           1, 1        0,1080   1920,1080
+	// Any vertices outside of NDC are clipped after we give gl_Position ((x, y, z, w), we clip to -w <= x <= w etc, then we divide through by w. Useful for perspective
+    // projection, but we're doing orthographic so the division doesn't mean anything to us, hence our w is one. If we set it to like 0.5, and x was 0.5, it woul clip x to 0.5,
+    // then 0.5/0.5 = 1, so scaling it back up to 1, it's a nice property of the division, if only partially clipped new vertices are made so it fits in NDC)
+	// hence this satisfies the above render info promise (since our viewport size = render size, and NDC is just scaled up to viewport size)
+	// This operates on primitives. Good video on homogenous coordinates: https://www.youtube.com/watch?v=o-xwmTODTUI
+	command_buffer.setViewport(0,
+		vk::Viewport {
+			.x = 0.0f,
+			.y = 0.0f,
+			.width = static_cast<float>(monitor.mode.hdisplay),
+			.height = static_cast<float>(monitor.mode.vdisplay),
+			.minDepth = 1.0f,
+			.maxDepth = 1.0f,
+		});
 
-// 	// Unlike the name suggests, it just specifies the colour attachment - it doesn't actually 'render' into it here
-// 	command_buffer.beginRendering(rendering_info);
-// 	// This is a graphics pipeline, we could have stuff like compute pipelines instead
-// 	command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline);
+	// scissors can allow us to discard fragments from the viewport, but we don't want to (eg. if we only wanted half of the viewport)
+	// but vulkan requires a scissor to be set (atleast matching viewport count). This operates on fragments
+	// (fragments are the size of one pixel, but multiple fragments can contribute to the same pixel, hence they aren't the same)
+	command_buffer.setScissor(0,
+		vk::Rect2D {
+			.offset = {
+				.x = 0,
+				.y = 0,
+			},
+			.extent = extent,
+		});
 
-// 	command_buffer.setViewport(0,
-// 		vk::Viewport {
-// 			.x = 0.0f,
-// 			.y = 0.0f,
-// 			.width = 1080.0f,
-// 			.height = 1080.0f,
-// 			.minDepth = 1.0f,
-// 			.maxDepth = 1.0f,
-// 		});
+	// Unlike the name suggests, it just specifies the colour attachment - it doesn't actually 'render' into it here
+	command_buffer.beginRendering(rendering_info);
+	// This is a graphics pipeline, we could have stuff like compute pipelines instead
+	command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, render.graphics_pipeline);
 
-// 	command_buffer.setScissor(0,
-// 		vk::Rect2D {
-// 			.offset = {
-// 				.x = 0,
-// 				.y = 0,
-// 			},
-// 			.extent = extent});
+	command_buffer.draw(3, 1, 0, 0);
 
-// 	command_buffer.draw(3, 1, 0, 0);
+	command_buffer.endRendering();
+	command_buffer.end();
 
-// 	command_buffer.endRendering();
-// 	command_buffer.end();
+	vk::CommandBufferSubmitInfo submit_info = {
+		.commandBuffer = command_buffer,
+	};
 
-// 	vk::CommandBufferSubmitInfo submit_info = {
-// 		.commandBuffer = command_buffer,
-// 	};
-
-// 	queue.submit2(vk::SubmitInfo2 {
-// 		.commandBufferInfoCount = 1,
-// 		.pCommandBufferInfos = &submit_info,
-// 	});
-
-// 	queue.waitIdle();
-// }
+	render.queue.submit2(vk::SubmitInfo2 {
+		.commandBufferInfoCount = 1,
+		.pCommandBufferInfos = &submit_info,
+	});
+}

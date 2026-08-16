@@ -66,6 +66,7 @@ export struct Monitor {
 	drmModeModeInfo mode;
 	Command command;
 	std::vector<Frame> frames;
+    std::uint32_t current_frame = 0;
 };
 
 export struct UltraFormat {
@@ -85,8 +86,8 @@ export struct Render {
 	std::mutex queue_mutex;
 	vk::raii::Pipeline graphics_pipeline;
 	vk::raii::Semaphore semaphore;
+    std::uint64_t semaphore_value = 0;
 	std::vector<UltraFormat> ultra_formats;
-
 	std::vector<Command> free_pools;
 };
 
@@ -104,4 +105,5 @@ export class Reality {
 	// General memory helper
 
 	std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
+    std::uint64_t increment_semaphore() { return render.semaphore_value++; }
 };

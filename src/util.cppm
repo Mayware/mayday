@@ -3,12 +3,12 @@ import std;
 import mayday.reality;
 
 // For variant matching
-export template<class... Ts>
-struct overload : Ts... {
-	using Ts::operator()...;
+export template<typename... Lambdas>
+struct overload : Lambdas... {
+    // To my understanding, overload resolution only works in a singlular scope, although we inherit the regular operator()'s, they're in different scopes,
+    // and so no overload resolution is done, only name resolution (which is ambiguous, since we don't do overload resolution)
+	using Lambdas::operator()...;
 };
-template<class... Ts>
-overload(Ts...) -> overload<Ts...>;
 
 // A helper to return the userdata, from any of the following heirarchies
 // T&& is a forwarding type (not temporary), so it allows references, and temporaries

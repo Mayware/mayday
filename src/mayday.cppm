@@ -32,16 +32,16 @@ export class Mayday : public Reality {
 	// Gets the vulkan "objects"
 	static Render get_shit();
 	VkMonitor get_vk_monitor(std::uint32_t width, std::uint32_t height, std::uint32_t frame_count);
+    void render_monitor(Monitor& monitor);
 
   public:
 	/* Mainly drm shit */
 	void regenerate_monitors();
+	void handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle);
 
 	mayquill::Server server;
 
-	Mayday() : Reality {
-				   .render = get_shit(),
-			   } {
+	Mayday() : Reality {.render = get_shit()} {
 
 		//* LIBSEAT *//
 		libseat_seat_listener listener = {
