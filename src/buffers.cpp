@@ -6,8 +6,8 @@ module;
 #include <sys/mman.h>
 #include <unistd.h>
 module mayquill;
-import :buffers;
-import :surfaces;
+import mayday.buffers;
+import mayday.surfaces;
 import mayday.util;
 import vulkan;
 import mayday.reality;

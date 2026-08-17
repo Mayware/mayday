@@ -78,9 +78,10 @@ export struct UltraFormat {
 
 export struct HeapBuffer {
 	vk::raii::DeviceMemory memory;
-	vk::DeviceAddress buffer_address;
+	vk::DeviceAddress gpu_address;
 	vk::DeviceSize reserved_size;
-	std::byte* mapped;
+    vk::DeviceSize size;
+	std::byte* cpu_address;
 	vk::raii::Buffer buffer;
 };
 

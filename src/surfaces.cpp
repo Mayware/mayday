@@ -2,7 +2,7 @@ module;
 #include "mayquill/logger.h"
 #include <cassert>
 module mayquill;
-import :surfaces;
+import mayday.surfaces;
 import mayday.util;
 
 namespace mayquill {

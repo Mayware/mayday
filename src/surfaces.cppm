@@ -4,17 +4,15 @@ module;
 #include <sys/ioctl.h>
 #include <xf86drm.h>
 #include <linux/sync_file.h>
-module mayquill:surfaces;
-import :logger;
-import :definitions;
-import :shell;
-import :server;
-import :sync;
-import :buffers;
+export module mayday.surfaces;
+import mayquill;
+export import mayday.shell;
+export import mayday.sync;
+export import mayday.buffers;
 import mayday.util;
 import std;
 
-namespace mayquill {
+export namespace mayquill {
 
 struct WlSubsurfaceData {
 	Key surface;

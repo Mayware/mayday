@@ -1,9 +1,9 @@
-module mayquill:buffers;
+export module mayday.buffers;
 import std;
 import vulkan;
 import mayday.reality;
 
-namespace mayquill {
+export namespace mayquill {
 struct WlBufferDataInner {
 	std::vector<int> plane_fds;
 	std::vector<vk::raii::DeviceMemory> memories;

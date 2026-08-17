@@ -4,8 +4,8 @@ module;
 #include <xf86drm.h>
 module mayquill;
 import mayday.util;
-import :surfaces;
-import :sync;
+import mayday.surfaces;
+import mayday.sync;
 
 namespace mayquill {
 

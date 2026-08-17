@@ -1,9 +1,8 @@
-export module mayquill:shell;
-import :definitions;
-import :interface;
+export module mayday.shell;
+import mayquill;
 import std;
 
-namespace mayquill {
+export namespace mayquill {
 struct ZwlrLayerSurfaceData {
 	Key surface;
 	std::optional<Key> output;

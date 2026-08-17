@@ -1,13 +1,12 @@
 module;
 #include "mayquill/logger.h"
 #include <xf86drm.h>
-module mayquill:sync;
-import :definitions;
-import :client;
-import :logger;
+export module mayday.sync;
+import std;
+import mayquill;
 import mayday.util;
 
-namespace mayquill {
+export namespace mayquill {
 struct SyncobjTimelineData {
 	int device_fd;
 	std::uint32_t handle;

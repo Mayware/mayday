@@ -1,7 +1,7 @@
 module mayquill;
-import :shell;
+import mayday.shell;
 import mayday.util;
-import :surfaces;
+import mayday.surfaces;
 
 namespace mayquill {
 void ZwlrLayerShellV1::handle(Request request) {

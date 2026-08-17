@@ -4,6 +4,9 @@ module;
 module mayday;
 import vulkan;
 import mayquill;
+import mayday.buffers;
+import mayday.surfaces;
+import mayday.util;
 
 /*
  *  The function2() functions exist as modern alternatives to the older non-2 functions.
@@ -552,7 +555,7 @@ Render Mayday::get_shit() {
 		// https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferCreateInfo.html
 		// https://docs.vulkan.org/spec/latest/chapters/resources.html - What counts as a resource (basically, buffers, images)
 		// basically, a resource is the underlying data. Samplers are not resources, hence their own heap since they aren't actually data in the same sense
-        // of an image, but rather, just configuration more like what an image view is.
+		// of an image, but rather, just configuration more like what an image view is.
 		auto buffer = device.createBuffer(vk::BufferCreateInfo {
 			.size = size,
 			.usage = vk::BufferUsageFlagBits::eDescriptorHeapEXT | vk::BufferUsageFlagBits::eShaderDeviceAddress, // 2nd one lets us get the address of the buffer, which we can then use directly in shaders
@@ -578,13 +581,13 @@ Render Mayday::get_shit() {
 		auto memory = device.allocateMemory(chain.get<vk::MemoryAllocateInfo>());
 		buffer.bindMemory(memory, 0);
 		auto buffer_address = device.getBufferAddress(vk::BufferDeviceAddressInfo {.buffer = buffer});
-		std::byte* mapped = static_cast<std::byte*>(memory.mapMemory(0, requirements.size)); // Map it into our process memory
-        // Remember, when using this buffer, the lowest address is actually mapped + reserved_size, not just mapped
+		std::byte* cpu_address = static_cast<std::byte*>(memory.mapMemory(0, requirements.size)); // Map it into our process memory
+																								  // Remember, when using this buffer, the lowest address is actually mapped + reserved_size, not just mapped
 
 		return HeapBuffer {
 			.memory = std::move(memory),
-			.buffer_address = std::move(buffer_address),
-			.mapped = std::move(mapped),
+			.gpu_address = std::move(buffer_address),
+			.cpu_address = std::move(cpu_address),
 			.buffer = std::move(buffer),
 		};
 	};
@@ -596,12 +599,16 @@ Render Mayday::get_shit() {
 	constexpr std::uint64_t max_images = 1024;
 	// The driver requires a reserved memory range in each heap, for its own tracking of stuff. Hence, for whatever size we request, we just add that ReservedRange (i.e. the size it will steal from us)
 	// 32 bytes is because each image is 4 vertices, and each vertex is 8 bytes (2 float32s), hence 32 bytes.
-    // Also fyi, obviously we aren't actually writing the images into the heap, just a view of it into it (like a pointer, but image view).
-    // A sampler is a descriptor and lives entirely in the heap. But an image is not a descriptor, a descriptor for an image tells the gpu how to access the image, hence only its descriptor lives in the heap
-	auto resource_heap = create_heap_buffer(heap_properties.imageDescriptorSize * max_images + (32 * max_images) + heap_properties.minResourceHeapReservedRange);
-    resource_heap.reserved_size = heap_properties.minResourceHeapReservedRange;
-	auto sampler_heap = create_heap_buffer(heap_properties.samplerDescriptorSize * max_images + heap_properties.minSamplerHeapReservedRange);
-    sampler_heap.reserved_size = heap_properties.minSamplerHeapReservedRange;
+	// Also fyi, obviously we aren't actually writing the images into the heap, just a view of it into it (like a pointer, but image view).
+	// A sampler is a descriptor and lives entirely in the heap. But an image is not a descriptor, a descriptor for an image tells the gpu how to access the image, hence only its descriptor lives in the heap
+	vk::DeviceSize resource_heap_size = heap_properties.imageDescriptorSize * max_images + (32 * max_images) + heap_properties.minResourceHeapReservedRange;
+	auto resource_heap = create_heap_buffer(resource_heap_size);
+	resource_heap.reserved_size = heap_properties.minResourceHeapReservedRange;
+	resource_heap.size = resource_heap_size;
+	vk::DeviceSize sampler_heap_size = heap_properties.samplerDescriptorSize * max_images + heap_properties.minSamplerHeapReservedRange;
+	auto sampler_heap = create_heap_buffer(sampler_heap_size);
+	sampler_heap.reserved_size = heap_properties.minSamplerHeapReservedRange;
+	sampler_heap.size = sampler_heap_size;
 
 	vk::PipelineCreateFlags2CreateInfo flags_create_info = {
 		.pNext = &pipeline_rendering_info,
@@ -647,8 +654,8 @@ Render Mayday::get_shit() {
 		.graphics_pipeline = std::move(graphics_pipeline),
 		.semaphore = std::move(semaphore),
 		.ultra_formats = std::move(ultra_formats),
-        .resource_heap = std::move(resource_heap),
-        .sampler_heap = std::move(sampler_heap),
+		.resource_heap = std::move(resource_heap),
+		.sampler_heap = std::move(sampler_heap),
 	};
 }
 
@@ -656,6 +663,19 @@ void Mayday::render_monitor(Monitor& monitor) {
 	auto& frame = monitor.frames[monitor.current_frame];
 	monitor.current_frame = (monitor.current_frame + 1) % monitor.frames.size();
 	auto& command_buffer = monitor.command.buffers[0];
+
+    // Write the images views
+    for (auto& client : server.clients) {
+        for (auto& object : client.get()->objects) {
+            auto& interface = std::get<1>(object.second);
+            using namespace mayquill;
+            if (std::holds_alternative<WlSurface>(interface)) {
+                auto& surface = std::get<WlSurface>(interface);
+                auto& surface_data = gimme_data<WlSurfaceData>(surface);
+            }
+        }
+    }
+
 	// Command buffers are the 'unit of work' on the gpu. When we are recording stuff into it, we're mainly setting metadata,
 	// only command buffers start in queue order between themselves, not stuff that was recorded within them.
 	command_buffer.begin(vk::CommandBufferBeginInfo {
@@ -768,6 +788,24 @@ void Mayday::render_monitor(Monitor& monitor) {
 	command_buffer.beginRendering(rendering_info);
 	// This is a graphics pipeline, we could have stuff like compute pipelines instead
 	command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, render.graphics_pipeline);
+
+	// Bind heaps: https://docs.vulkan.org/refpages/latest/refpages/source/VkBindHeapInfoEXT.html
+	command_buffer.bindResourceHeapEXT(vk::BindHeapInfoEXT {
+		.heapRange = vk::DeviceAddressRangeEXT {
+			.address = render.resource_heap.gpu_address,
+			.size = render.resource_heap.size,
+		},
+		.reservedRangeOffset = 0,
+		.reservedRangeSize = render.resource_heap.reserved_size,
+	});
+	command_buffer.bindSamplerHeapEXT(vk::BindHeapInfoEXT {
+		.heapRange = vk::DeviceAddressRangeEXT {
+			.address = render.sampler_heap.gpu_address,
+			.size = render.sampler_heap.size,
+		},
+		.reservedRangeOffset = 0,
+		.reservedRangeSize = render.sampler_heap.reserved_size,
+	});
 
 	command_buffer.draw(3, 1, 0, 0);
 
