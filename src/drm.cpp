@@ -394,4 +394,18 @@ void Mayday::regenerate_monitors() {
 
 void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle) {
 	auto& monitor = *std::ranges::find(monitors, crtc_handle, &Monitor::crtc_handle);
+	++monitor.current_frame;
+
+	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
+	if (!atomic_request)
+		MQ_XERROR("Failed to allocate atomic request");
+	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
+
+	drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"),
+		monitor.frames[monitor.current_frame].framebuffer_handle);
+
+	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
+		MQ_XERRNO("Failed attomic commit (frame update)");
+
+    render_monitor(monitor);
 }

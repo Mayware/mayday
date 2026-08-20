@@ -123,7 +123,6 @@ export class Reality {
 	void donate_pool(Command&& command);
 
 	// General memory helper
-
 	static std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
 	std::uint64_t increment_semaphore() { return render.semaphore_value++; }
 };

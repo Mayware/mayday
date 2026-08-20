@@ -608,6 +608,22 @@ Render Mayday::get_shit() {
 	auto sampler_heap = create_heap_buffer(sampler_heap_size);
 	sampler_heap.size = sampler_heap_size;
 
+	// Write the samplers into the heap (samplers do stuff like choosing filtering, anisotropy, scaling etc)
+	// Most formats can use this default sampler, but when we do ycbrsomething (the one wth brightness plane, two colour planes),
+	// it has a special sampler, so we'll add that when required (TODO)
+	// https://docs.vulkan.org/spec/latest/chapters/samplers.html#VkSamplerCreateInfo
+	vk::SamplerCreateInfo sampler_create_info = {
+		.magFilter = vk::Filter::eLinear,
+		.minFilter = vk::Filter::eLinear,
+	};
+
+	vk::HostAddressRangeEXT target = {
+		.address = sampler_heap.cpu_address,
+		.size = heap_properties.samplerDescriptorSize,
+	};
+
+	device.writeSamplerDescriptorsEXT(std::array {sampler_create_info}, std::array {target});
+
 	vk::PipelineCreateFlags2CreateInfo flags_create_info = {
 		.pNext = &pipeline_rendering_info,
 		.flags = vk::PipelineCreateFlagBits2::eDescriptorHeapEXT,
@@ -659,8 +675,7 @@ Render Mayday::get_shit() {
 }
 
 void Mayday::render_monitor(Monitor& monitor) {
-	auto& frame = monitor.frames[monitor.current_frame];
-	monitor.current_frame = (monitor.current_frame + 1) % monitor.frames.size();
+	auto& frame = monitor.frames[(monitor.current_frame + 1) % monitor.frames.size()]; // We render into the next frame
 	auto& command_buffer = monitor.command.buffers[0];
 
 	// Write the images views
@@ -677,27 +692,27 @@ void Mayday::render_monitor(Monitor& monitor) {
 					auto& buffer_data = gimme_data<WlBufferData>(client->get_object<WlBuffer>(key));
 					auto& inner = (*buffer_data.inner);
 
-                    // TODO - Only allow surfaces that are on this monitor and buffer scale
-                    float scale_width, scale_height, scale_x, scale_y;
-                    auto geometry = *surface_data.geometry;
-                    if (geometry.width == 0 && geometry.height == 0) {
-                        scale_width = static_cast<float>(buffer_data.inner.width) / monitor.mode.hdisplay;
-                        scale_height = static_cast<float>(buffer_data.inner.height) / monitor.mode.vdisplay;
-                    } else {
-                        scale_width = static_cast<float>(geometry.width) / monitor.mode.hdisplay;
-                        scale_height = static_cast<float>(geometry.height) / monitor.mode.vdisplay;
-                    }
-                    scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
-                    scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
+					// TODO - Only allow surfaces that are on this monitor and buffer scale
+					float scale_width, scale_height, scale_x, scale_y;
+					auto geometry = *surface_data.geometry;
+					if (geometry.width == 0 && geometry.height == 0) {
+						scale_width = static_cast<float>(inner.width) / monitor.mode.hdisplay;
+						scale_height = static_cast<float>(inner.height) / monitor.mode.vdisplay;
+					} else {
+						scale_width = static_cast<float>(geometry.width) / monitor.mode.hdisplay;
+						scale_height = static_cast<float>(geometry.height) / monitor.mode.vdisplay;
+					}
+					scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
+					scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
 
-                    auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(render.resource_heap.cpu_address + (i * sizeof(ArbitraryDescriptor)));
-                    *arbitrary = ArbitraryDescriptor {
-                        .x = 0,
-                        .y = 0,
-                        .width = 1,
-                        .height = 1,
-                        .sampler_index = 1,
-                    };
+					auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(render.resource_heap.cpu_address + (i * sizeof(ArbitraryDescriptor)));
+					*arbitrary = ArbitraryDescriptor {
+						.x = 0,
+						.y = 0,
+						.width = 1,
+						.height = 1,
+						.sampler_index = 0,
+					};
 
 					vk::ImageViewCreateInfo view_info = {
 						.image = inner.image,
@@ -868,7 +883,26 @@ void Mayday::render_monitor(Monitor& monitor) {
 		.reservedRangeSize = render.heap_properties.minSamplerHeapReservedRange,
 	});
 
-	command_buffer.draw(3, 1, 0, 0);
+	struct {
+        // uint in vulkan is highp by default (32 bits, can use mediump or lowp to change precision)
+        std::uint32_t resource_heap_offset;
+        std::uint32_t sampler_heap_offset;
+	} push_data = {
+        // We're forced to narrow, our structured descriptor heap vulkan ext doesn't support 64 bit ext's TODO put a check on get_shit
+        .resource_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minResourceHeapReservedRange),
+        .sampler_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minSamplerHeapReservedRange),
+    };
+
+	// https://docs.vulkan.org/refpages/latest/refpages/source/VkPushDataInfoEXT.html
+	command_buffer.pushDataEXT(vk::PushDataInfoEXT {
+		.offset = 0,
+		.data = vk::HostAddressRangeConstEXT {
+			.address = &push_data,
+			.size = sizeof(push_data),
+		},
+	});
+
+	command_buffer.draw(6, i, 0, 0);
 
 	command_buffer.endRendering();
 	command_buffer.end();
@@ -877,8 +911,19 @@ void Mayday::render_monitor(Monitor& monitor) {
 		.commandBuffer = command_buffer,
 	};
 
+	// Set the semaphore target to signal
+	auto semaphore_value = increment_semaphore();
+	frame.semaphore_value = semaphore_value;
+	vk::SemaphoreSubmitInfo signal_info = {
+		.semaphore = render.semaphore,
+		.value = semaphore_value,
+		.stageMask = vk::PipelineStageFlagBits2::eAllCommands,
+	};
+
 	render.queue.submit2(vk::SubmitInfo2 {
 		.commandBufferInfoCount = 1,
 		.pCommandBufferInfos = &submit_info,
+		.signalSemaphoreInfoCount = 1,
+		.pSignalSemaphoreInfos = &signal_info,
 	});
 }
