@@ -48,6 +48,8 @@ void WlShmPool::handle(Request request) {
 		overload {
 			[this, &pool_data](CreateBuffer& request) {
 				auto create_shm = [this, request, &pool_data]() -> WlBufferDataInner {
+					std::uint32_t width = static_cast<std::uint32_t>(request.width);
+					std::uint32_t height = static_cast<std::uint32_t>(request.height);
 					std::uint32_t drm_format;
 					// https://wayland.app/protocols/wayland#wl_shm:enum:format Thank you to the beautiful, magestic, wayland specification
 					// for allowing me the privilege of adding these exceptional cases.
@@ -73,8 +75,8 @@ void WlShmPool::handle(Request request) {
 						.imageType = vk::ImageType::e2D,
 						.format = ultra_format.vk_format,
 						.extent = {
-							.width = static_cast<std::uint32_t>(request.width),
-							.height = static_cast<std::uint32_t>(request.height),
+							.width = width,
+							.height = height,
 							.depth = 1,
 						},
 						.mipLevels = 1,
@@ -123,8 +125,8 @@ void WlShmPool::handle(Request request) {
 
 						},
 						.imageExtent = {
-							.width = static_cast<std::uint32_t>(request.width),
-							.height = static_cast<std::uint32_t>(request.height),
+							.width = width,
+							.height = height,
 							.depth = 1,
 						}};
 
@@ -176,6 +178,8 @@ void WlShmPool::handle(Request request) {
 					std::vector<vk::raii::DeviceMemory> memories;
 					memories.push_back(std::move(image_memory));
 					return WlBufferDataInner {
+						.width = width,
+						.height = height,
 						.memories = std::move(memories),
 						.image = std::move(image),
 						.ultra_format = std::move(ultra_format),

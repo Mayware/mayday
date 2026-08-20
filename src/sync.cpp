@@ -52,7 +52,7 @@ void WpLinuxDrmSyncobjSurfaceV1::handle(Request request) {
 					   // Wayland spec only does u32's, but the timeline integer is a u64, hence we combine two fields into one
 					   auto& surface = client.get_object<WlSurface>(data.surface);
 					   auto timeline_data = gimme_data<std::shared_ptr<SyncobjTimelineData>>(client.grab_object<WpLinuxDrmSyncobjTimelineV1>(request.timeline));
-					   gimme_data<WlSurfaceData>(surface).delta.buffer.acquire_point = SyncobjPoint {
+					   gimme_data<WlSurfaceData>(surface).delta.buffer_friends.acquire_point = SyncobjPoint {
 						   .point = combine_u32s(request.point_hi, request.point_lo),
 						   .timeline_data = timeline_data,
 					   };
@@ -61,7 +61,7 @@ void WpLinuxDrmSyncobjSurfaceV1::handle(Request request) {
 				   [this, &data](SetReleasePoint& request) {
 					   auto& surface = client.get_object<WlSurface>(data.surface);
 					   auto timeline_data = gimme_data<std::shared_ptr<SyncobjTimelineData>>(client.grab_object<WpLinuxDrmSyncobjTimelineV1>(request.timeline));
-					   gimme_data<WlSurfaceData>(surface).delta.buffer.release_point = SyncobjPoint {
+					   gimme_data<WlSurfaceData>(surface).delta.buffer_friends.release_point = SyncobjPoint {
 						   .point = combine_u32s(request.point_hi, request.point_lo),
 						   .timeline_data = timeline_data,
 					   };

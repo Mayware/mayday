@@ -79,10 +79,17 @@ export struct UltraFormat {
 export struct HeapBuffer {
 	vk::raii::DeviceMemory memory;
 	vk::DeviceAddress gpu_address;
-	vk::DeviceSize reserved_size;
-    vk::DeviceSize size;
+	vk::DeviceSize size;
 	std::byte* cpu_address;
 	vk::raii::Buffer buffer;
+};
+
+export struct ArbitraryDescriptor {
+    float x;
+    float y;
+    float width;
+    float height;
+    std::uint32_t sampler_index;
 };
 
 export struct Render {
@@ -99,8 +106,9 @@ export struct Render {
 	vk::raii::Semaphore semaphore;
 	std::uint64_t semaphore_value = 0;
 	std::vector<UltraFormat> ultra_formats;
-    HeapBuffer resource_heap;
-    HeapBuffer sampler_heap;
+	HeapBuffer resource_heap;
+	HeapBuffer sampler_heap;
+	vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties;
 };
 
 export class Reality {
@@ -119,3 +127,4 @@ export class Reality {
 	static std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
 	std::uint64_t increment_semaphore() { return render.semaphore_value++; }
 };
+

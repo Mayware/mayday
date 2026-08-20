@@ -42,7 +42,8 @@ class WlSurfaceDelta {
 	bool fifo_wait_barrier = false;
 	std::optional<std::chrono::steady_clock::time_point> commit_timestamp = std::nullopt;
 	std::vector<Key> presentation_feedbacks;
-	BufferFriends buffer = {};
+	BufferFriends buffer_friends = {};
+	std::optional<Geometry> geometry = std::nullopt;
 	std::vector<Key> frame_callbacks = {};
 
 	WlSurfaceDelta(WlSurfaceData& surface_data) : surface_data(surface_data) {}
@@ -58,7 +59,8 @@ class WlSurfaceData {
 	std::optional<Key> drm_syncobj = std::nullopt;
 	std::optional<Key> fifo = std::nullopt;
 	std::optional<Key> commit_timer = std::nullopt;
-	BufferFriends buffer;
+	BufferFriends buffer_friends;
+	std::optional<Geometry> geometry = std::nullopt;
 	std::optional<std::chrono::steady_clock::time_point> commit_timestamp = std::nullopt;
 	std::vector<Key> children = std::vector<Key> {}; // Subsurfaces are the chidlren
 	std::vector<Key> frame_callbacks = {};
@@ -137,8 +139,8 @@ class WlSurfaceData {
 			delta.slave_deltas.push_back(&rear_delta);
 		}
 
-		if (delta.buffer.buffer and *delta.buffer.buffer) {
-			auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer.buffer));
+		if (delta.buffer_friends.buffer and *delta.buffer_friends.buffer) {
+			auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer_friends.buffer));
 			// Only the shm path sets the optional. Dmabuf is uploaded immediately already
             // data.shm being some, and inner being none means that the kicker hasn't yet been started
 			if (data.shm) {
@@ -175,8 +177,8 @@ class WlSurfaceData {
 				return false;
 
             // Check if the buffer is ready to be applied
-			if (front.buffer.buffer && *front.buffer.buffer) {
-				auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**front.buffer.buffer));
+			if (front.buffer_friends.buffer && *front.buffer_friends.buffer) {
+				auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**front.buffer_friends.buffer));
 				if (data.shm) {
 					//**Shm path
 					// Mutex is currently locked, ie. uploader is still uploading and hasn't released, can't apply
@@ -184,8 +186,8 @@ class WlSurfaceData {
 						return false;
 				} else {
 					//**Dmabuf path, yield for the acquire point, if it exists
-					if (front.buffer.acquire_point) {
-						auto& point = *front.buffer.acquire_point;
+					if (front.buffer_friends.acquire_point) {
+						auto& point = *front.buffer_friends.acquire_point;
 						if (drmSyncobjTimelineWait(point.timeline_data.get()->device_fd, &point.timeline_data.get()->handle, &point.point, 1, 0, 0, nullptr))
                             // Acquire point not yet reached, can't apply
 							return false;
@@ -282,14 +284,17 @@ class WlSurfaceData {
 
 			fifo_set_barrier |= front.fifo_set_barrier;
 
-			if (front.buffer.buffer) {
+			if (front.buffer_friends.buffer) {
 				// Old buffer is being replaced, signal the release
-				if (buffer.release_point)
+				if (buffer_friends.release_point)
                     // TODO NEED TO EXPORT SYNC FILE AND THEN GET THAT TO SIGNAL RELEASE INSTEAD
-					buffer.release_point->signal_release();
+					buffer_friends.release_point->signal_release();
 
-				buffer = std::move(front.buffer);
+				buffer_friends = std::move(front.buffer_friends);
 			}
+
+			if (front.geometry)
+				geometry = front.geometry;
 
 			frame_callbacks.insert(frame_callbacks.end(),
 				std::make_move_iterator(front.frame_callbacks.begin()),

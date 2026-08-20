@@ -44,9 +44,9 @@ struct TypeList {};
 // Contains functionality
 template<typename List, typename T>
 struct Contains;
-// Specialisation of contains
+// Partial Specialisation of contains
 template<typename T, typename... Types>
-struct Contains<TypeList<Types...>, T> {
+struct Contains<TypeList<Types...>, T> { // the 2nd <> is the specialisation syntax
 	static constexpr bool value = (std::is_same_v<T, Types> || ...);
 };
 // Just take the ::value

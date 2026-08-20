@@ -603,11 +603,9 @@ Render Mayday::get_shit() {
 	// A sampler is a descriptor and lives entirely in the heap. But an image is not a descriptor, a descriptor for an image tells the gpu how to access the image, hence only its descriptor lives in the heap
 	vk::DeviceSize resource_heap_size = heap_properties.imageDescriptorSize * max_images + (32 * max_images) + heap_properties.minResourceHeapReservedRange;
 	auto resource_heap = create_heap_buffer(resource_heap_size);
-	resource_heap.reserved_size = heap_properties.minResourceHeapReservedRange;
 	resource_heap.size = resource_heap_size;
 	vk::DeviceSize sampler_heap_size = heap_properties.samplerDescriptorSize * max_images + heap_properties.minSamplerHeapReservedRange;
 	auto sampler_heap = create_heap_buffer(sampler_heap_size);
-	sampler_heap.reserved_size = heap_properties.minSamplerHeapReservedRange;
 	sampler_heap.size = sampler_heap_size;
 
 	vk::PipelineCreateFlags2CreateInfo flags_create_info = {
@@ -656,6 +654,7 @@ Render Mayday::get_shit() {
 		.ultra_formats = std::move(ultra_formats),
 		.resource_heap = std::move(resource_heap),
 		.sampler_heap = std::move(sampler_heap),
+		.heap_properties = std::move(heap_properties),
 	};
 }
 
@@ -664,17 +663,79 @@ void Mayday::render_monitor(Monitor& monitor) {
 	monitor.current_frame = (monitor.current_frame + 1) % monitor.frames.size();
 	auto& command_buffer = monitor.command.buffers[0];
 
-    // Write the images views
-    for (auto& client : server.clients) {
-        for (auto& object : client.get()->objects) {
-            auto& interface = std::get<1>(object.second);
-            using namespace mayquill;
-            if (std::holds_alternative<WlSurface>(interface)) {
-                auto& surface = std::get<WlSurface>(interface);
-                auto& surface_data = gimme_data<WlSurfaceData>(surface);
-            }
-        }
-    }
+	// Write the images views
+	std::uint32_t i = 0;
+	for (auto& client : server.clients) {
+		for (auto& object : client.get()->objects) {
+			auto& interface = std::get<1>(object.second);
+			using namespace mayquill;
+			if (std::holds_alternative<WlSurface>(interface)) {
+				auto& surface = std::get<WlSurface>(interface);
+				auto& surface_data = gimme_data<WlSurfaceData>(surface);
+				if (surface_data.buffer_friends.buffer && *surface_data.buffer_friends.buffer) {
+					auto key = **surface_data.buffer_friends.buffer;
+					auto& buffer_data = gimme_data<WlBufferData>(client->get_object<WlBuffer>(key));
+					auto& inner = (*buffer_data.inner);
+
+                    // TODO - Only allow surfaces that are on this monitor and buffer scale
+                    float scale_width, scale_height, scale_x, scale_y;
+                    auto geometry = *surface_data.geometry;
+                    if (geometry.width == 0 && geometry.height == 0) {
+                        scale_width = static_cast<float>(buffer_data.inner.width) / monitor.mode.hdisplay;
+                        scale_height = static_cast<float>(buffer_data.inner.height) / monitor.mode.vdisplay;
+                    } else {
+                        scale_width = static_cast<float>(geometry.width) / monitor.mode.hdisplay;
+                        scale_height = static_cast<float>(geometry.height) / monitor.mode.vdisplay;
+                    }
+                    scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
+                    scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
+
+                    auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(render.resource_heap.cpu_address + (i * sizeof(ArbitraryDescriptor)));
+                    *arbitrary = ArbitraryDescriptor {
+                        .x = 0,
+                        .y = 0,
+                        .width = 1,
+                        .height = 1,
+                        .sampler_index = 1,
+                    };
+
+					vk::ImageViewCreateInfo view_info = {
+						.image = inner.image,
+						.viewType = vk::ImageViewType::e2D,
+						.format = inner.ultra_format.vk_format,
+						.components = inner.ultra_format.vk_swizzed,
+						.subresourceRange = {
+							.aspectMask = vk::ImageAspectFlagBits::eColor,
+							.baseMipLevel = 0,
+							.levelCount = 0,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						}};
+
+					// https://vkdoc.net/man/VkImageDescriptorInfoEXT
+					vk::ImageDescriptorInfoEXT image_descriptor_info = {
+						.pView = &view_info,
+						.layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+					};
+
+					// https://vkdoc.net/man/VkResourceDescriptorInfoEXT
+					vk::ResourceDescriptorInfoEXT resource_descriptor_info = {
+						.type = vk::DescriptorType::eSampledImage,
+						// https://vkdoc.net/man/VkResourceDescriptorDataEXT
+						.data = vk::ResourceDescriptorDataEXT(&image_descriptor_info), // This is a union type
+					};
+
+					vk::HostAddressRangeEXT target = {
+						.address = render.resource_heap.cpu_address + ((i + 1) * sizeof(ArbitraryDescriptor)) + (i * render.heap_properties.imageDescriptorSize),
+						.size = render.heap_properties.imageDescriptorSize,
+					};
+
+					render.device.writeResourceDescriptorsEXT(std::array {resource_descriptor_info}, std::array {target});
+					++i;
+				}
+			}
+		}
+	}
 
 	// Command buffers are the 'unit of work' on the gpu. When we are recording stuff into it, we're mainly setting metadata,
 	// only command buffers start in queue order between themselves, not stuff that was recorded within them.
@@ -796,7 +857,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 			.size = render.resource_heap.size,
 		},
 		.reservedRangeOffset = 0,
-		.reservedRangeSize = render.resource_heap.reserved_size,
+		.reservedRangeSize = render.heap_properties.minResourceHeapReservedRange,
 	});
 	command_buffer.bindSamplerHeapEXT(vk::BindHeapInfoEXT {
 		.heapRange = vk::DeviceAddressRangeEXT {
@@ -804,7 +865,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 			.size = render.sampler_heap.size,
 		},
 		.reservedRangeOffset = 0,
-		.reservedRangeSize = render.sampler_heap.reserved_size,
+		.reservedRangeSize = render.heap_properties.minSamplerHeapReservedRange,
 	});
 
 	command_buffer.draw(3, 1, 0, 0);

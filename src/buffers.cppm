@@ -5,6 +5,8 @@ import mayday.reality;
 
 export namespace mayquill {
 struct WlBufferDataInner {
+    std::uint32_t width;
+    std::uint32_t height;
 	std::vector<int> plane_fds;
 	std::vector<vk::raii::DeviceMemory> memories;
 	vk::raii::Image image;

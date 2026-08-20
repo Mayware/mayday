@@ -46,7 +46,7 @@ void WlSurface::handle(Request request) {
 					   if (request.x != 0 || request.y != 0)
 						   client.error(keyd.id, WlSurface::ErrorEnum::InvalidOffset,
 							   std::format("X and Y must be 0, but they were {} and {}", request.x, request.y));
-					   surface_data.delta.buffer.buffer = request.buffer ? std::optional(client.grab_object<WlBuffer>(*request.buffer).key) : std::nullopt;
+					   surface_data.delta.buffer_friends.buffer = request.buffer ? std::optional(client.grab_object<WlBuffer>(*request.buffer).key) : std::nullopt;
 				   },
 				   [this](Damage& request) {},
 				   [this, &surface_data](Frame& request) {
@@ -82,8 +82,8 @@ void WlSurface::handle(Request request) {
 						   MQ_INFO("Sent initial configure");
 					   }
 
-					   // if (surface_data.buffer.held()) {
-					   // client.get_object<WlBuffer>((*surface_data.buffer.held())).release();
+					   // if (surface_data.buffer_friends.held()) {
+					   // client.get_object<WlBuffer>((*surface_data.buffer_friends.held())).release();
 					   // }
 				   },
 				   [this](SetBufferTransform& request) {},

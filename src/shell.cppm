@@ -10,6 +10,13 @@ struct ZwlrLayerSurfaceData {
 	std::string _namespace;
 };
 
+struct Geometry {
+	std::int32_t x;
+	std::int32_t y;
+	std::uint32_t width;
+	std::uint32_t height;
+};
+
 class XdgSurfaceData {
   public:
 	Key surface;

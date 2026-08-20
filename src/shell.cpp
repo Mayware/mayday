@@ -5,38 +5,40 @@ import mayday.surfaces;
 
 namespace mayquill {
 void ZwlrLayerShellV1::handle(Request request) {
-	std::visit(overload {
-				   [this](GetLayerSurface& request) {
-					   auto surface = client.grab_object<WlSurface>(request.surface);
-					   auto layer_surface = client.add_object<ZwlrLayerSurfaceV1>(request.id,
-						   std::make_unique<ZwlrLayerSurfaceData>(
-							   surface.key,
-							   request.output ? std::optional(client.grab_object<WlOutput>(*request.output).key) : std::nullopt,
-							   request.layer,
-							   request._namespace));
-					   gimme_data<WlSurfaceData>(surface).set_role<ZwlrLayerSurfaceV1>(layer_surface.key);
-				   },
-				   [this](Destroy& request) {}},
+	std::visit(
+		overload {
+			[this](GetLayerSurface& request) {
+				auto surface = client.grab_object<WlSurface>(request.surface);
+				auto layer_surface = client.add_object<ZwlrLayerSurfaceV1>(request.id,
+					std::make_unique<ZwlrLayerSurfaceData>(
+						surface.key,
+						request.output ? std::optional(client.grab_object<WlOutput>(*request.output).key) : std::nullopt,
+						request.layer,
+						request._namespace));
+				gimme_data<WlSurfaceData>(surface).set_role<ZwlrLayerSurfaceV1>(layer_surface.key);
+			},
+			[this](Destroy& request) {}},
 		request);
 }
 
 void ZwlrLayerSurfaceV1::handle(Request request) {
-	std::visit(overload {
-				   [this](SetSize& request) {},
-				   [this](SetAnchor& request) {},
-				   [this](SetExclusiveZone& request) {},
-				   [this](SetMargin& request) {},
-				   [this](SetKeyboardInteractivity& request) {},
-				   [this](GetPopup& request) {},
-				   [this](AckConfigure& request) {},
-				   [this](Destroy& request) {
-					   auto& surface = client.get_object<WlSurface>(
-						   gimme_data<ZwlrLayerSurfaceData>(user_data).surface);
-					   gimme_data<WlSurfaceData>(surface).remove_role();
-				   },
-				   [this](SetLayer& request) {},
-				   [this](SetExclusiveEdge& request) {},
-			   },
+	auto& data = gimme_data<ZwlrLayerSurfaceData>(user_data);
+	std::visit(
+		overload {
+			[this](SetSize& request) {},
+			[this](SetAnchor& request) {},
+			[this](SetExclusiveZone& request) {},
+			[this](SetMargin& request) {},
+			[this](SetKeyboardInteractivity& request) {},
+			[this](GetPopup& request) {},
+			[this](AckConfigure& request) {},
+			[this, &data](Destroy& request) {
+				auto& surface = client.get_object<WlSurface>(data.surface);
+				gimme_data<WlSurfaceData>(surface).remove_role();
+			},
+			[this](SetLayer& request) {},
+			[this](SetExclusiveEdge& request) {},
+		},
 		request);
 }
 
@@ -57,12 +59,12 @@ void XdgWmBase::handle(Request request) {
 }
 
 void XdgSurface::handle(Request request) {
+
+	auto& data = gimme_data<XdgSurfaceData>(user_data);
 	std::visit(overload {
-				   [this](GetToplevel& request) {
-					   auto surface_key = gimme_data<XdgSurfaceData>(user_data).surface;
-					   auto& surface = client.get_object<WlSurface>(surface_key);
-					   auto toplevel = client.add_object<XdgToplevel>(request.id,
-						   std::make_unique<XdgToplevelData>(surface_key, keyd));
+				   [this, &data](GetToplevel& request) {
+					   auto& surface = client.get_object<WlSurface>(data.surface);
+					   auto toplevel = client.add_object<XdgToplevel>(request.id, std::make_unique<XdgToplevelData>(data.surface, keyd));
 					   gimme_data<WlSurfaceData>(surface).set_role<XdgToplevel>(toplevel.key);
 				   },
 				   [this](GetPopup& request) {
@@ -72,7 +74,15 @@ void XdgSurface::handle(Request request) {
 						   std::make_unique<XdgPopupData>(surface_key, keyd));
 					   gimme_data<WlSurfaceData>(surface).set_role<XdgPopup>(popup.key);
 				   },
-				   [this](SetWindowGeometry& request) {},
+				   [this, &data](SetWindowGeometry& request) {
+					   auto& surface_data = gimme_data<WlSurfaceData>(client.get_object<WlSurface>(data.surface));
+					   surface_data.delta.geometry = Geometry {
+						   .x = request.x,
+						   .y = request.y,
+						   .width = static_cast<std::uint32_t>(request.width),
+						   .height = static_cast<std::uint32_t>(request.height),
+					   };
+				   },
 				   [this](AckConfigure& request) {},
 				   [this](Destroy& request) {},
 			   },
