@@ -72,7 +72,7 @@ void Reality::donate_pool(Command&& command) {
 
 // base_requirements is the memoryTypeBits you get from the image requirements. These are the base requirements for the image
 // extended requirements are the additional memory property flags you want. These aren't native to the image (ie. the image doesn't care about device local memory), they're additional reqs you want
-std::optional<std::uint32_t> Reality::get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements) {
+std::optional<std::uint32_t> Reality::get_memory_type_index(vk::raii::PhysicalDevice& physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements) {
 	auto memory_properties = physical_device.getMemoryProperties();
 	for (int i = 0; i < memory_properties.memoryTypeCount; ++i) {
 		// memoryTypeBits (base_requirements) is a bitmask representing memory_properties.memoryTypes indices

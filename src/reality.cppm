@@ -104,7 +104,7 @@ export struct Render {
 	std::mutex queue_mutex;
 	vk::raii::Pipeline graphics_pipeline;
 	vk::raii::Semaphore semaphore;
-	std::uint64_t semaphore_value = 0;
+	std::uint64_t semaphore_value = 0; // This is the current value, ie. something will be yielding on this, it's not the one free after
 	std::vector<UltraFormat> ultra_formats;
 	HeapBuffer resource_heap;
 	HeapBuffer sampler_heap;
@@ -123,7 +123,7 @@ export class Reality {
 	void donate_pool(Command&& command);
 
 	// General memory helper
-	static std::optional<std::uint32_t> get_memory_type_index(vk::PhysicalDevice physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
-	std::uint64_t increment_semaphore() { return render.semaphore_value++; }
+	static std::optional<std::uint32_t> get_memory_type_index(vk::raii::PhysicalDevice& physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
+	std::uint64_t increment_semaphore() { return ++render.semaphore_value; }
 };
 

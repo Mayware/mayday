@@ -88,7 +88,7 @@ void WlShmPool::handle(Request request) {
 						.initialLayout = vk::ImageLayout::eUndefined,
 					});
 					auto requirements = image.getMemoryRequirements();
-					auto memory_type_index = reality.get_memory_type_index(*reality.render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+					auto memory_type_index = reality.get_memory_type_index(reality.render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 					if (!memory_type_index.has_value())
 						MQ_XERROR("No appropriate image memory found");
 					vk::MemoryAllocateInfo allocation_info = {
@@ -240,7 +240,7 @@ void ZwpLinuxDmabufV1::handle(Request request) {
 			}
 		}
 		auto size = format_table.size() * sizeof(FormatEntry);
-		int fd = memfd_create("format-table", 0);
+		int fd = memfd_create("format-table", MFD_CLOEXEC);
 		if (fd == -1)
 			MQ_XERRNO("Failed to create format table fd");
 		DEFER([fd]() { close(fd); });
@@ -357,8 +357,8 @@ WlBufferDataInner handle_dmabuf(Client& client, std::int32_t width, std::int32_t
 	std::vector<vk::BindImageMemoryInfo> memory_bind_infos;
 	memory_bind_infos.reserve(plane_layouts.size());
 	for (int i = 0; i < plane_layouts.size(); ++i) {
-		int fd = fcntl(planes[i].fd, F_DUPFD, 0);
-		if (fd)
+		int fd = fcntl(planes[i].fd, F_DUPFD_CLOEXEC, 0);
+		if (fd == -1)
 			MQ_XERRNO("Failed to dupe fd");
 		plane_fds.push_back(fd);
 
@@ -385,7 +385,7 @@ WlBufferDataInner handle_dmabuf(Client& client, std::int32_t width, std::int32_t
 				// allocating memory, as you can see below obviously, we're specifying the imported memory, but also the memory type is just a mask which limits
 				// what access we have to the memory / provides additional details. Vulkan is unaware of what we're "allowed" to do with the memory, so we a valid mask
 				// Crucially, multiple memory types can point to the same underlying memory, just with different controls on what we're allowed to do
-				.memoryTypeIndex = *reality.get_memory_type_index(*reality.render.physical_device, compatible_memory_types, vk::MemoryPropertyFlags {}),
+				.memoryTypeIndex = *reality.get_memory_type_index(reality.render.physical_device, compatible_memory_types, vk::MemoryPropertyFlags {}),
 			},
 			vk::ImportMemoryFdInfoKHR {
 				.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,

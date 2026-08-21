@@ -25,7 +25,7 @@ header "GCC"
 cmake -B build/build-gcc -G Ninja -Wno-author \
     -DCMAKE_C_COMPILER=/opt/gcc-git/bin/gcc \
     -DCMAKE_CXX_COMPILER=/opt/gcc-git/bin/g++ \
-    -DCMAKE_CXX_FLAGS="$GCC_FLAGS -O0 -DNDEBUG" \
+    -DCMAKE_CXX_FLAGS="$GCC_FLAGS -O0 -DDEBUG" \
     -DCMAKE_EXE_LINKER_FLAGS="$LINKER_FLAGS"
 
 header "GCC [Debug]"

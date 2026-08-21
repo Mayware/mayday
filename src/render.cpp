@@ -29,6 +29,7 @@ constexpr std::array required_extensions = {
 	vk::EXTImageDrmFormatModifierExtensionName, // Allows us to use DRM format modifiers with images
 	vk::KHRExternalMemoryFdExtensionName,		// Ability to export device memory as POSIX FD's (generic)
 	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
+	vk::EXTDescriptorHeapExtensionName,			// Allows us to use descriptor heaps
 };
 
 // Our internal image format is the 0 index, which is equivalent to vk::Format::eB8G8R8A8Unorm
@@ -220,7 +221,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 
 		// Allocate the memory
 		auto requirements = image.getMemoryRequirements();
-		auto memory_type_index = get_memory_type_index(*render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+		auto memory_type_index = get_memory_type_index(render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 		if (!memory_type_index.has_value())
 			MQ_XERROR("No appropriate image memory found");
 
@@ -561,7 +562,7 @@ Render Mayday::get_shit() {
 			.usage = vk::BufferUsageFlagBits::eDescriptorHeapEXT | vk::BufferUsageFlagBits::eShaderDeviceAddress, // 2nd one lets us get the address of the buffer, which we can then use directly in shaders
 		});
 		auto requirements = buffer.getMemoryRequirements();
-		auto memory_type_index = get_memory_type_index(*physical_device, requirements.memoryTypeBits,
+		auto memory_type_index = get_memory_type_index(physical_device, requirements.memoryTypeBits,
 			// Host coherent means that it automatically flushes after we write on the CPU side
 			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal);
 		if (!memory_type_index.has_value())
@@ -618,7 +619,7 @@ Render Mayday::get_shit() {
 	};
 
 	vk::HostAddressRangeEXT target = {
-		.address = sampler_heap.cpu_address,
+		.address = sampler_heap.cpu_address + heap_properties.minSamplerHeapReservedRange,
 		.size = heap_properties.samplerDescriptorSize,
 	};
 
@@ -705,7 +706,8 @@ void Mayday::render_monitor(Monitor& monitor) {
 					scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
 					scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
 
-					auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(render.resource_heap.cpu_address + (i * sizeof(ArbitraryDescriptor)));
+					auto arbitrary_descriptor_address = render.resource_heap.cpu_address + render.heap_properties.minResourceHeapReservedRange + (i * (sizeof(ArbitraryDescriptor) + render.heap_properties.imageDescriptorSize));
+					auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(arbitrary_descriptor_address);
 					*arbitrary = ArbitraryDescriptor {
 						.x = 0,
 						.y = 0,
@@ -722,7 +724,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 						.subresourceRange = {
 							.aspectMask = vk::ImageAspectFlagBits::eColor,
 							.baseMipLevel = 0,
-							.levelCount = 0,
+							.levelCount = 1,
 							.baseArrayLayer = 0,
 							.layerCount = 1,
 						}};
@@ -741,7 +743,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 					};
 
 					vk::HostAddressRangeEXT target = {
-						.address = render.resource_heap.cpu_address + ((i + 1) * sizeof(ArbitraryDescriptor)) + (i * render.heap_properties.imageDescriptorSize),
+						.address = arbitrary_descriptor_address + sizeof(ArbitraryDescriptor), // Write after the arbitrary
 						.size = render.heap_properties.imageDescriptorSize,
 					};
 
@@ -801,10 +803,10 @@ void Mayday::render_monitor(Monitor& monitor) {
 		.storeOp = vk::AttachmentStoreOp::eStore,
 		.clearValue = vk::ClearColorValue {
 			std::array {
-				0.5f,
-				0.5f,
-				0.5f,
-				0.1f,
+				15.f / 255.f,
+				15.f / 255.f,
+				15.f / 255.f,
+				1.0f,
 			},
 		},
 	};
@@ -884,14 +886,14 @@ void Mayday::render_monitor(Monitor& monitor) {
 	});
 
 	struct {
-        // uint in vulkan is highp by default (32 bits, can use mediump or lowp to change precision)
-        std::uint32_t resource_heap_offset;
-        std::uint32_t sampler_heap_offset;
+		// uint in vulkan is highp by default (32 bits, can use mediump or lowp to change precision)
+		std::uint32_t resource_heap_offset;
+		std::uint32_t sampler_heap_offset;
 	} push_data = {
-        // We're forced to narrow, our structured descriptor heap vulkan ext doesn't support 64 bit ext's TODO put a check on get_shit
-        .resource_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minResourceHeapReservedRange),
-        .sampler_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minSamplerHeapReservedRange),
-    };
+		// We're forced to narrow, our structured descriptor heap vulkan ext doesn't support 64 bit ext's TODO put a check on get_shit
+		.resource_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minResourceHeapReservedRange),
+		.sampler_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minSamplerHeapReservedRange),
+	};
 
 	// https://docs.vulkan.org/refpages/latest/refpages/source/VkPushDataInfoEXT.html
 	command_buffer.pushDataEXT(vk::PushDataInfoEXT {

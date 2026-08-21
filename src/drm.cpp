@@ -217,57 +217,60 @@ void Mayday::regenerate_monitors() {
 		bool dirty = false;		   // To do a partial teardown
 
 		// Check if the monitor still exists
-		auto viable_monitor = std::find_if(viable_monitors.begin(), viable_monitors.end(), [&monitor](auto& viable_monitor) {
+		auto viable_monitor_it = std::find_if(viable_monitors.begin(), viable_monitors.end(), [&monitor](auto& viable_monitor) {
 			return monitor.connector_handle == viable_monitor.connector_handle;
 		});
-		if (viable_monitor == viable_monitors.end()) {
+		if (viable_monitor_it == viable_monitors.end()) {
 			avadakedavra = true;
 			dirty = true;
-		}
+		} else {
+            // Still exists, if anything is changed, change it back (making the minimum changes possible)
+            auto& viable_monitor = *viable_monitor_it;
+			if (monitor.crtc_handle != viable_monitor.crtc_handle) {
+				drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
+				drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+				drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
+				dirty = true;
+			}
+			if (monitor.encoder_handle != viable_monitor.encoder_handle) {
+				dirty = true;
+			}
+			if (monitor.plane_handle != viable_monitor.plane_handle) {
+				drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
+				drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+				dirty = true;
+			}
 
-		if (monitor.crtc_handle != (*viable_monitor).crtc_handle) {
-			drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
-			dirty = true;
-		}
-		if (monitor.encoder_handle != (*viable_monitor).encoder_handle) {
-			dirty = true;
-		}
-		if (monitor.plane_handle != (*viable_monitor).plane_handle) {
-			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
-			dirty = true;
-		}
-
-		// Compare all mode fields (that aren't just derived from others)
-		if (monitor.mode.clock != viable_monitor->mode.clock ||
-			monitor.mode.hdisplay != viable_monitor->mode.hdisplay ||
-			monitor.mode.hsync_start != viable_monitor->mode.hsync_start ||
-			monitor.mode.hsync_end != viable_monitor->mode.hsync_end ||
-			monitor.mode.htotal != viable_monitor->mode.htotal ||
-			monitor.mode.hskew != viable_monitor->mode.hskew ||
-			monitor.mode.vdisplay != viable_monitor->mode.vdisplay ||
-			monitor.mode.vsync_start != viable_monitor->mode.vsync_start ||
-			monitor.mode.vsync_end != viable_monitor->mode.vsync_end ||
-			monitor.mode.vtotal != viable_monitor->mode.vtotal ||
-			monitor.mode.vscan != viable_monitor->mode.vscan ||
-			monitor.mode.vrefresh != viable_monitor->mode.vrefresh ||
-			monitor.mode.flags != viable_monitor->mode.flags ||
-			monitor.mode.type != viable_monitor->mode.type) {
-			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
-			dirty = true;
+			// Compare all mode fields (that aren't just derived from others)
+			if (monitor.mode.clock != viable_monitor.mode.clock ||
+				monitor.mode.hdisplay != viable_monitor.mode.hdisplay ||
+				monitor.mode.hsync_start != viable_monitor.mode.hsync_start ||
+				monitor.mode.hsync_end != viable_monitor.mode.hsync_end ||
+				monitor.mode.htotal != viable_monitor.mode.htotal ||
+				monitor.mode.hskew != viable_monitor.mode.hskew ||
+				monitor.mode.vdisplay != viable_monitor.mode.vdisplay ||
+				monitor.mode.vsync_start != viable_monitor.mode.vsync_start ||
+				monitor.mode.vsync_end != viable_monitor.mode.vsync_end ||
+				monitor.mode.vtotal != viable_monitor.mode.vtotal ||
+				monitor.mode.vscan != viable_monitor.mode.vscan ||
+				monitor.mode.vrefresh != viable_monitor.mode.vrefresh ||
+				monitor.mode.flags != viable_monitor.mode.flags ||
+				monitor.mode.type != viable_monitor.mode.type) {
+				drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
+				dirty = true;
+			}
 		}
 
 		// Monitor is fine
 		if (!(dirty || avadakedavra)) {
 			++i;
-			viable_monitors.erase(viable_monitor); // We already have it, and it's the same
+			viable_monitors.erase(viable_monitor_it); // We already have it, and it's the same
 			continue;
 		}
 
 		if (avadakedavra) {
 			// This label clears ALL the atomic properties, rather than the fine-grained ones above
+            // (Cleanup includes setting the CRTC to inactive etc, stopping any scanout)
 			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
 			drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
 			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
@@ -383,7 +386,7 @@ void Mayday::regenerate_monitors() {
 		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), monitor.mode.vdisplay);
 	}
 	// LET IT RIPPPPP!
-	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
+	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
 		MQ_XERRNO("Failed attomic commit");
 
 	// New monitors are completely initialised now (God willing)
@@ -394,7 +397,8 @@ void Mayday::regenerate_monitors() {
 
 void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle) {
 	auto& monitor = *std::ranges::find(monitors, crtc_handle, &Monitor::crtc_handle);
-	++monitor.current_frame;
+	// TODO - yield on semaphore value (or export sync file rather), and then rneder inline, this will change the current definition
+	monitor.current_frame = (monitor.current_frame + 1) % monitor.frames.size(); // This is the actual frame currently being presented, so literally current
 
 	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
 	if (!atomic_request)
@@ -404,8 +408,9 @@ void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, un
 	drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"),
 		monitor.frames[monitor.current_frame].framebuffer_handle);
 
-	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr))
+	// The atomic commit already inherently leads to a page flip, DRM_MODE_PAGE_FLIP_EVENT just means notify us when it's happened
+	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
 		MQ_XERRNO("Failed attomic commit (frame update)");
 
-    render_monitor(monitor);
+	render_monitor(monitor);
 }

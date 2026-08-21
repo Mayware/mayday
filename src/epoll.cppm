@@ -17,7 +17,7 @@ export class Epoll {
 	};
 
 	Epoll() {
-		epoll_fd = epoll_create1(0);
+		epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 		if (epoll_fd == -1) {
 			MQ_XERROR("Failed to create epoll_fd");
 		};

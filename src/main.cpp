@@ -1,9 +1,12 @@
 #include <libudev.h>
-#include <xf86drm.h>
 #include <mayquill/logger.h>
+#include <spawn.h>
+#include <xf86drm.h>
 import mayday;
 import mayday.epoll;
 import std;
+
+extern char** environ;
 
 void handle_vsync_wrapper(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle, void* user_data) {
 	// tv_usec means time value microseconds, where 1000 microseconds = 1 millisecond and 1000 milliseconds = 1 second
@@ -15,6 +18,10 @@ int main() {
 	std::println(" This is incorrect! Exiting!");
 	std::exit(1);
 #endif
+
+    char* argv[] = { (char*)"havoc", nullptr };
+	posix_spawn(nullptr, "/usr/bin/havoc", nullptr, nullptr, argv, environ);
+
 	Mayday mayday;
 	Epoll epoll;
 
@@ -47,13 +54,13 @@ int main() {
 					mayday.regenerate_monitors();
 				break;
 			}
-            // device fd
+			// device fd
 			case 2: {
-                drmEventContext handler = {
-                    .version = DRM_EVENT_CONTEXT_VERSION,
-                    .page_flip_handler2 = &handle_vsync_wrapper,
-                };
-                drmHandleEvent(mayday.seat.device_fd, &handler);
+				drmEventContext handler = {
+					.version = DRM_EVENT_CONTEXT_VERSION,
+					.page_flip_handler2 = &handle_vsync_wrapper,
+				};
+				drmHandleEvent(mayday.seat.device_fd, &handler);
 			}
 			}
 		}
