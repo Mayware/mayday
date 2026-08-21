@@ -2,7 +2,6 @@ module;
 #include <libudev.h>
 #include <mayday/libseat.h>
 #include <mayquill/logger.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -30,7 +29,7 @@ export class Mayday : public Reality {
   private:
 	/* Vulkan shit */
 	// Gets the vulkan "objects"
-	static Render get_shit();
+	static Render get_shit(dev_t device_rdev);
 	VkMonitor get_vk_monitor(std::uint32_t width, std::uint32_t height, std::uint32_t frame_count);
     void render_monitor(Monitor& monitor);
 
@@ -41,7 +40,12 @@ export class Mayday : public Reality {
 
 	mayquill::Server server;
 
-	Mayday() : Reality {.render = get_shit()} {
+	Mayday(std::string device_path, dev_t device_rdev) : Reality {.render = get_shit(device_rdev)} {
+        //* MISC *//
+        auto misc = Misc {
+            .device_path = device_path,
+            .device_rdev = device_rdev,
+        };
 
 		//* LIBSEAT *//
 		libseat_seat_listener listener = {
@@ -64,14 +68,9 @@ export class Mayday : public Reality {
 		}
 
 		// Device id is libseats internal handle to the device, it takes it again when closing the device
-		seat.device_id = libseat_open_device(seat.seat, "/dev/dri/card0", &seat.device_fd);
+		seat.device_id = libseat_open_device(seat.seat, misc.device_path.c_str(), &seat.device_fd);
 		if (seat.device_id == -1)
 			MQ_XERRNO("Failed to open device");
-		// https://labex.io/lesson/device-types
-		struct stat info {};
-		if (fstat(seat.device_fd, &info) == -1)
-			MQ_XERRNO("Failed to stat device fd");
-		seat.rdev = info.st_rdev;
 
 		//* UDEV *//
 		// Udev 'context', essentially, the handle to udev

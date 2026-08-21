@@ -19,7 +19,6 @@ export struct Seat {
 	int seat_fd;
 	int device_id;
 	int device_fd;
-	dev_t rdev;
 };
 
 export struct Udev {
@@ -111,8 +110,14 @@ export struct Render {
 	vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties;
 };
 
+export struct Misc {
+    std::string device_path;
+    dev_t device_rdev;
+};
+
 export class Reality {
   public:
+    Misc misc;
 	Seat seat;
 	Udev udevd;
 	Render render;

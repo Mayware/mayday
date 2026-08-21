@@ -253,8 +253,8 @@ void ZwpLinuxDmabufV1::handle(Request request) {
 		auto& feedback = client.add_object<ZwpLinuxDmabufFeedbackV1>(id).object;
 		feedback.format_table(fd, size);
 		// Construct main device
-		std::vector<std::uint8_t> bytes(sizeof(reality.seat.rdev));
-		std::memcpy(bytes.data(), &reality.seat.rdev, sizeof(reality.seat.rdev));
+		std::vector<std::uint8_t> bytes(sizeof(reality.misc.device_rdev));
+		std::memcpy(bytes.data(), &reality.misc.device_rdev, sizeof(reality.misc.device_rdev));
 		feedback.main_device(bytes);
 		// Set tranche target device
 		feedback.tranche_target_device(bytes);

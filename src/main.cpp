@@ -1,7 +1,10 @@
 #include <libudev.h>
+#include <mayday/libseat.h>
 #include <mayquill/logger.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <xf86drm.h>
+import mayquill;
 import mayday;
 import mayday.epoll;
 import std;
@@ -19,9 +22,15 @@ int main() {
 	std::exit(1);
 #endif
 
-	Mayday mayday;
+	auto device_path = "/dev/dri/card1";
+	// https://labex.io/lesson/device-types
+	struct stat st_info {};
+	if (stat(device_path, &st_info) == -1)
+		MQ_XERRNO("Failed to stat device");
+	Mayday mayday(std::move(device_path), st_info.st_rdev);
+
 	char* argv[] = {(char*)"havoc", nullptr};
-    posix_spawn(nullptr, "/usr/bin/havoc", nullptr, nullptr, argv, environ);
+	posix_spawn(nullptr, "/usr/bin/havoc", nullptr, nullptr, argv, environ);
 
 	Epoll epoll;
 
@@ -36,6 +45,7 @@ int main() {
 			switch (event.data.u32) {
 			// seat fd
 			case 0: {
+				libseat_dispatch(mayday.seat.seat, 0);
 				break;
 			}
 			// Udev watch fd

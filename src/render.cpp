@@ -1,6 +1,8 @@
 module;
 #include <drm_fourcc.h>
 #include <mayquill/logger.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
 module mayday;
 import vulkan;
 import mayquill;
@@ -283,9 +285,11 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 	};
 }
 
-Render Mayday::get_shit() {
+Render Mayday::get_shit(dev_t device_rdev) {
 	// Loads libvulkan (manually, via dlopen), and caches the function pointers to be used for instance creation
 	// and other gloval entry points
+	// https://github.com/KhronosGroup/Vulkan-Hpp/blob/main/docs/Usage.md#extensions-and-per-device-function-pointers
+	// https://github.com/KhronosGroup/Vulkan-Hpp/blob/main/docs/Handles.md
 	vk::raii::Context context = {};
 
 	static constexpr vk::ApplicationInfo app_info = {
@@ -311,8 +315,21 @@ Render Mayday::get_shit() {
 	// A physical device is an actual GPU / vulkan-capable device, that vulkan has access to
 	// It becomes a logical device when we actually connect to it
 	for (auto& physical : instance.enumeratePhysicalDevices()) {
-		if (physical.getProperties().apiVersion < vk_version)
+		auto properties_chain = physical.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDrmPropertiesEXT>();
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceProperties2.html
+		auto properties = properties_chain.get<vk::PhysicalDeviceProperties2>();
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceDrmPropertiesEXT.html
+		auto drm_properties = properties_chain.get<vk::PhysicalDeviceDrmPropertiesEXT>();
+
+		if (properties.properties.apiVersion < vk_version)
 			continue;
+
+        // We chose the primary node previously, ensure we have the same physical device
+        if (!drm_properties.hasPrimary)
+            continue;
+        auto rdev = makedev(drm_properties.primaryMajor, drm_properties.primaryMinor);
+        if (rdev != device_rdev)
+            continue;
 
 		// Vulkan has the concept of `Queue Families`. Queue families is a group of queues that all have the same capabilites.
 		// Queue families will advertise capbilities such as `graphics`, `compute`, `transfer, `video decode` etc, implying their supported operations.
@@ -697,14 +714,14 @@ void Mayday::render_monitor(Monitor& monitor) {
 					// TODO - Only allow surfaces that are on this monitor and buffer scale
 					float scale_width, scale_height, scale_x = 0, scale_y = 0;
 					if (surface_data.geometry) {
-                        // Geometry is explicitly set, not buffer inferred
+						// Geometry is explicitly set, not buffer inferred
 						auto geometry = *surface_data.geometry;
 						scale_width = static_cast<float>(geometry.width) / monitor.mode.hdisplay;
 						scale_height = static_cast<float>(geometry.height) / monitor.mode.vdisplay;
 						scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
 						scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
 					} else {
-                        // Geometry is buffer inffered
+						// Geometry is buffer inffered
 						scale_width = static_cast<float>(inner.width) / monitor.mode.hdisplay;
 						scale_height = static_cast<float>(inner.height) / monitor.mode.vdisplay;
 					}
@@ -838,10 +855,12 @@ void Mayday::render_monitor(Monitor& monitor) {
 	//  -1,-1           1,-1        0,0         1920,0
 	//          0,0                      960,540
 	//  -1, 1           1, 1        0,1080   1920,1080
-	// Any vertices outside of NDC are clipped after we give gl_Position ((x, y, z, w), we clip to -w <= x <= w etc, then we divide through by w. Useful for perspective
+	// Any vertices outside of NDC are clipped after we give gl_Position ((x, y, z, w), we clip to -w <= x,y <= w and 0 <= z <= w (eg. if w was 2, x,y would be -2,2 range, and z would be 0,2 range
+	// (https://docs.vulkan.org/spec/latest/chapters/vertexpostproc.html#vertexpostproc-clipping), then we divide through by w, hence bringing us back to -1,1 and 0,1 range. Useful for perspective
 	// projection, but we're doing orthographic so the division doesn't mean anything to us, hence our w is one. If we set it to like 0.5, and x was 0.5, it woul clip x to 0.5,
 	// then 0.5/0.5 = 1, so scaling it back up to 1, it's a nice property of the division, if only partially clipped new vertices are made so it fits in NDC)
 	// hence this satisfies the above render info promise (since our viewport size = render size, and NDC is just scaled up to viewport size)
+	// +X is right, +Y is down, +Z is into the screen (away from us)
 	// This operates on primitives. Good video on homogenous coordinates: https://www.youtube.com/watch?v=o-xwmTODTUI
 	command_buffer.setViewport(0,
 		vk::Viewport {
