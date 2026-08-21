@@ -688,23 +688,26 @@ void Mayday::render_monitor(Monitor& monitor) {
 			if (std::holds_alternative<WlSurface>(interface)) {
 				auto& surface = std::get<WlSurface>(interface);
 				auto& surface_data = gimme_data<WlSurfaceData>(surface);
+				surface_data.apply_committed_deltas();
 				if (surface_data.buffer_friends.buffer && *surface_data.buffer_friends.buffer) {
 					auto key = **surface_data.buffer_friends.buffer;
 					auto& buffer_data = gimme_data<WlBufferData>(client->get_object<WlBuffer>(key));
 					auto& inner = (*buffer_data.inner);
 
 					// TODO - Only allow surfaces that are on this monitor and buffer scale
-					float scale_width, scale_height, scale_x, scale_y;
-					auto geometry = *surface_data.geometry;
-					if (geometry.width == 0 && geometry.height == 0) {
-						scale_width = static_cast<float>(inner.width) / monitor.mode.hdisplay;
-						scale_height = static_cast<float>(inner.height) / monitor.mode.vdisplay;
-					} else {
+					float scale_width, scale_height, scale_x = 0, scale_y = 0;
+					if (surface_data.geometry) {
+                        // Geometry is explicitly set, not buffer inferred
+						auto geometry = *surface_data.geometry;
 						scale_width = static_cast<float>(geometry.width) / monitor.mode.hdisplay;
 						scale_height = static_cast<float>(geometry.height) / monitor.mode.vdisplay;
+						scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
+						scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
+					} else {
+                        // Geometry is buffer inffered
+						scale_width = static_cast<float>(inner.width) / monitor.mode.hdisplay;
+						scale_height = static_cast<float>(inner.height) / monitor.mode.vdisplay;
 					}
-					scale_x = static_cast<float>(geometry.x) / monitor.mode.hdisplay;
-					scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
 
 					auto arbitrary_descriptor_address = render.resource_heap.cpu_address + render.heap_properties.minResourceHeapReservedRange + (i * (sizeof(ArbitraryDescriptor) + render.heap_properties.imageDescriptorSize));
 					auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(arbitrary_descriptor_address);

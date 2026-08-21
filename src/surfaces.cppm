@@ -182,8 +182,11 @@ class WlSurfaceData {
 				if (data.shm) {
 					//**Shm path
 					// Mutex is currently locked, ie. uploader is still uploading and hasn't released, can't apply
-					if (!data.shm->lock.try_lock())
+					if (!data.shm->lock.try_lock()) {
 						return false;
+                    } else {
+                        data.shm->lock.unlock();
+                    }
 				} else {
 					//**Dmabuf path, yield for the acquire point, if it exists
 					if (front.buffer_friends.acquire_point) {

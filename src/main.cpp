@@ -19,15 +19,16 @@ int main() {
 	std::exit(1);
 #endif
 
-    char* argv[] = { (char*)"havoc", nullptr };
-	posix_spawn(nullptr, "/usr/bin/havoc", nullptr, nullptr, argv, environ);
-
 	Mayday mayday;
+	char* argv[] = {(char*)"havoc", nullptr};
+    posix_spawn(nullptr, "/usr/bin/havoc", nullptr, nullptr, argv, environ);
+
 	Epoll epoll;
 
 	epoll.add_fd(mayday.seat.seat_fd, 0, Epoll::Interest::Readable);
 	epoll.add_fd(mayday.udevd.watch_fd, 1, Epoll::Interest::Readable);
 	epoll.add_fd(mayday.seat.device_fd, 2, Epoll::Interest::Readable);
+	epoll.add_fd(mayday.server.fd, 3, Epoll::Interest::Readable);
 
 	while (true) {
 		auto events = epoll.yield();
@@ -62,6 +63,19 @@ int main() {
 				};
 				drmHandleEvent(mayday.seat.device_fd, &handler);
 			}
+			// wayland server fd
+			case 3: {
+				auto accepted_clients = mayday.server.try_accept_clients();
+				// TODO add logic to remove clients
+				for (auto fd : accepted_clients) {
+					epoll.add_fd(fd, 4, Epoll::Interest::Readable);
+				}
+			}
+			// ALL wayland client fds (they all trigger 4)
+			case 4: {
+			}
+				mayday.server.try_listen_requests();
+				mayday.server.try_flush_events(); // TODO will need a way for events to be flushed to wake up the event loop on its own
 			}
 		}
 	}

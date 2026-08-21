@@ -47,7 +47,9 @@ void WlShmPool::handle(Request request) {
 	std::visit(
 		overload {
 			[this, &pool_data](CreateBuffer& request) {
-				auto create_shm = [this, request, &pool_data]() -> WlBufferDataInner {
+				auto& reality = gimme_reality(client);
+				// Notice how pool data is copied, not pointer'ed, we also hold a shared reference during this thread lifetime
+				auto create_shm = [&reality, request, pool_data]() -> WlBufferDataInner {
 					std::uint32_t width = static_cast<std::uint32_t>(request.width);
 					std::uint32_t height = static_cast<std::uint32_t>(request.height);
 					std::uint32_t drm_format;
@@ -64,7 +66,6 @@ void WlShmPool::handle(Request request) {
 						drm_format = static_cast<std::uint32_t>(request.format);
 						break;
 					}
-					auto& reality = gimme_reality(client);
 					auto it = std::ranges::find_if(reality.render.ultra_formats, [drm_format](const UltraFormat& format) { return format.drm_format == drm_format; });
 					if (it == reality.render.ultra_formats.end())
 						MQ_XERROR("Unable to find matching ultra format for drm format");

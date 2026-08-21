@@ -10,7 +10,6 @@ void WlDisplay::handle(Request request) {
 				   [this](Sync& request) {
 					   auto callback = client.add_object<WlCallback>(request.callback);
 					   callback.object.done(0);
-					   callback.object.destroy();
 				   },
 				   [this](GetRegistry& request) {
 					   auto registry = client.add_object<WlRegistry>(request.registry);
