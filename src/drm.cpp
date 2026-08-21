@@ -13,6 +13,8 @@ import mayday.util;
 import mayquill;
 import std;
 
+#define ADD_ATOMIC_PROPERTY(...) if (drmModeAtomicAddProperty(__VA_ARGS__) < 0) MQ_XERRNO("Failed to add an atomic property");
+
 /*
  *  Framebuffer -> Plane -> CRTC -> Encoder -> Connector
  *
@@ -95,6 +97,8 @@ struct DrmMonitor {
 
 // This is an explicit no-op, if the monitors aren't actually different to what the connector scan on the device_fd shows. Only changed monitors are regenerated
 void Mayday::regenerate_monitors() {
+    // THis literally regenerates all monitors, reforming all their structs, then it diffs it against the existing structs,
+    // and adds atomic properties depending on what the diff is to make it match this new viable_monitor state
 	std::vector<DrmMonitor> viable_monitors;
 	std::vector<drmModeConnector*> viable_connectors;
 
@@ -227,17 +231,17 @@ void Mayday::regenerate_monitors() {
             // Still exists, if anything is changed, change it back (making the minimum changes possible)
             auto& viable_monitor = *viable_monitor_it;
 			if (monitor.crtc_handle != viable_monitor.crtc_handle) {
-				drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
-				drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
-				drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
+				ADD_ATOMIC_PROPERTY(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
+				ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+				ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
 				dirty = true;
 			}
 			if (monitor.encoder_handle != viable_monitor.encoder_handle) {
 				dirty = true;
 			}
 			if (monitor.plane_handle != viable_monitor.plane_handle) {
-				drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
-				drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+				ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
+				ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
 				dirty = true;
 			}
 
@@ -256,7 +260,7 @@ void Mayday::regenerate_monitors() {
 				monitor.mode.vrefresh != viable_monitor.mode.vrefresh ||
 				monitor.mode.flags != viable_monitor.mode.flags ||
 				monitor.mode.type != viable_monitor.mode.type) {
-				drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
+				ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
 				dirty = true;
 			}
 		}
@@ -271,11 +275,11 @@ void Mayday::regenerate_monitors() {
 		if (avadakedavra) {
 			// This label clears ALL the atomic properties, rather than the fine-grained ones above
             // (Cleanup includes setting the CRTC to inactive etc, stopping any scanout)
-			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
-			drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
+			ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
+			ADD_ATOMIC_PROPERTY(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
+			ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
+			ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), 0);
+			ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 0);
 		}
 		if (dirty) {
 			monitors.erase(monitors.begin() + i);
@@ -343,7 +347,7 @@ void Mayday::regenerate_monitors() {
 	}
 
 	// Modeset all new monitors
-	// drmModeAtomicAddProperty takes atomic_request, object_id (object handle), property_id (property handle), property value
+	// ADD_ATOMIC_PROPERTY takes atomic_request, object_id (object handle), property_id (property handle), property value
 	std::vector<std::uint32_t> mode_blob_handles;
 	DEFER([fd = seat.device_fd, &mode_blob_handles]() {
 		// Clean up the modes we allocated in the loop
@@ -353,9 +357,9 @@ void Mayday::regenerate_monitors() {
 	});
 	for (auto& monitor : new_monitors) {
 		// Set the chosen CRTC that drives this connector
-		drmModeAtomicAddProperty(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), monitor.crtc_handle);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), monitor.crtc_handle);
 		// Set the CRTC to be active (actually scanning out data)
-		drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 1);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "ACTIVE"), 1);
 		// Set the mode the CRTC is operating with (eg. refresh, res, etc). We're choosing the 0th mode arbitrarily
 		// The connector->modes[] array is NOT an array of the mode handles. Modes do not have handles, they are infact just directly stored (as drmModeModeInfo)
 		// in the array as their values. Hence, there is no handle value to pass as an integer to atomic add property, as the mode is directly the value.
@@ -364,26 +368,26 @@ void Mayday::regenerate_monitors() {
 		if (drmModeCreatePropertyBlob(seat.device_fd, &monitor.mode, sizeof(monitor.mode), &mode_blob_handle))
 			MQ_XERRNO("Failed to create mode property blob");
 		mode_blob_handles.push_back(mode_blob_handle);
-		drmModeAtomicAddProperty(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
 		// Assign the frame buffer to the plane
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), monitor.frames[0].framebuffer_handle);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), monitor.frames[0].framebuffer_handle);
 		// Tell the plane about the CRTC it feeds into. We do it on the planes end because a plane can only link to one CRTC, where as a CRTC may link to many planes
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), monitor.crtc_handle);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), monitor.crtc_handle);
 		// The SRC_ values use 16whole.16decimal numbers (ie. decimal point half way through in 32 bit number)
 		// This is done to allow fractional co-ordinates, in cases where the SRC_size is smaller than the CRTC_output_size (hence you can still refer to pixels on the CRTC)
 		// X position of where to start reading inside the framebuffer
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_X"), 0 << 16);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_X"), 0 << 16);
 		// Y position of where to start reading inside the framebuffer
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_Y"), 0 << 16);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_Y"), 0 << 16);
 		// How many x pixels to read (width) from the framebuffer
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_W"), monitor.mode.hdisplay << 16);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_W"), monitor.mode.hdisplay << 16);
 		// How many y pixels to read (height, downwards) from the framebuffer
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_H"), monitor.mode.vdisplay << 16);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "SRC_H"), monitor.mode.vdisplay << 16);
 		// The output co-ordinates of where to put that sampled plane onto the CRTC
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_X"), 0);
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), monitor.mode.hdisplay);
-		drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), monitor.mode.vdisplay);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_X"), 0);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), monitor.mode.hdisplay);
+		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), monitor.mode.vdisplay);
 	}
 	// LET IT RIPPPPP!
 	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
@@ -405,7 +409,7 @@ void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, un
 		MQ_XERROR("Failed to allocate atomic request");
 	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
 
-	drmModeAtomicAddProperty(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"),
+	ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"),
 		monitor.frames[monitor.current_frame].framebuffer_handle);
 
 	// The atomic commit already inherently leads to a page flip, DRM_MODE_PAGE_FLIP_EVENT just means notify us when it's happened
