@@ -17,6 +17,11 @@ void handle_vsync_wrapper(int fd, unsigned int sequence, unsigned int tv_sec, un
 }
 
 int main() {
+	std::jthread exit_timer([]() {
+		std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::terminate();
+	});
+
 #ifndef MAYQUILL_ICE
 	std::println(" This is incorrect! Exiting!");
 	std::exit(1);
@@ -62,16 +67,18 @@ int main() {
 					}
 				}
 				if (needs_regen)
-					mayday.regenerate_monitors();
-				break;
+					// mayday.regenerate_monitors();
+					break;
 			}
 			// device fd
 			case 2: {
-				drmEventContext handler = {
-					.version = DRM_EVENT_CONTEXT_VERSION,
-					.page_flip_handler2 = &handle_vsync_wrapper,
-				};
-				drmHandleEvent(mayday.seat.device_fd, &handler);
+				if (mayday.seat.active) {
+					drmEventContext handler = {
+						.version = DRM_EVENT_CONTEXT_VERSION,
+						.page_flip_handler2 = &handle_vsync_wrapper,
+					};
+					drmHandleEvent(mayday.seat.device_fd, &handler);
+				}
 			}
 			// wayland server fd
 			case 3: {

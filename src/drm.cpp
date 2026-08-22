@@ -167,6 +167,7 @@ void Mayday::regenerate_monitors() {
 					encoder_handle = encoder->encoder_id;
 					crtc_handle = handle;
 					crtc_index = j;
+                    break;
 				}
 			}
 		}
@@ -320,6 +321,8 @@ void Mayday::regenerate_monitors() {
 				offsets[i] = layout.offset;
 			}
 			std::uint32_t framebuffer_handle;
+            // TODO: Check if the chosen format + modifier is actually supported by the PLANE we attach the framebuffer to, see: https://docs.kernel.org/next/gpu/drm-kms.html
+            // ctrl f drm_any_plane_has_format.
 			if (drmModeAddFB2WithModifiers(seat.device_fd, monitor.mode.hdisplay, monitor.mode.vdisplay, render.ultra_formats[0].drm_format,
 					handles, pitches, offsets, modifiers, &framebuffer_handle, DRM_MODE_FB_MODIFIERS))
 				MQ_XERRNO("Failed to create framebuffer");
@@ -388,6 +391,7 @@ void Mayday::regenerate_monitors() {
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), monitor.mode.hdisplay);
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), monitor.mode.vdisplay);
+        // TODO - NOTICE HOW WE DON'T SET THE ENCODER - WE DON'T CONTROL THE SET ENCODER, SO WE NEED TO STOP SAVING AND CHECKFING FOR IT
 	}
 	// LET IT RIPPPPP!
 	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
