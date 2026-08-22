@@ -13,7 +13,9 @@ import mayday.util;
 import mayquill;
 import std;
 
-#define ADD_ATOMIC_PROPERTY(...) if (drmModeAtomicAddProperty(__VA_ARGS__) < 0) MQ_XERRNO("Failed to add an atomic property");
+#define ADD_ATOMIC_PROPERTY(...)                   \
+	if (drmModeAtomicAddProperty(__VA_ARGS__) < 0) \
+		MQ_XERRNO("Failed to add an atomic property");
 
 /*
  *  Framebuffer -> Plane -> CRTC -> Encoder -> Connector
@@ -97,8 +99,8 @@ struct DrmMonitor {
 
 // This is an explicit no-op, if the monitors aren't actually different to what the connector scan on the device_fd shows. Only changed monitors are regenerated
 void Mayday::regenerate_monitors() {
-    // THis literally regenerates all monitors, reforming all their structs, then it diffs it against the existing structs,
-    // and adds atomic properties depending on what the diff is to make it match this new viable_monitor state
+	// THis literally regenerates all monitors, reforming all their structs, then it diffs it against the existing structs,
+	// and adds atomic properties depending on what the diff is to make it match this new viable_monitor state
 	std::vector<DrmMonitor> viable_monitors;
 	std::vector<drmModeConnector*> viable_connectors;
 
@@ -167,7 +169,7 @@ void Mayday::regenerate_monitors() {
 					encoder_handle = encoder->encoder_id;
 					crtc_handle = handle;
 					crtc_index = j;
-                    break;
+					break;
 				}
 			}
 		}
@@ -229,8 +231,8 @@ void Mayday::regenerate_monitors() {
 			avadakedavra = true;
 			dirty = true;
 		} else {
-            // Still exists, if anything is changed, change it back (making the minimum changes possible)
-            auto& viable_monitor = *viable_monitor_it;
+			// Still exists, if anything is changed, change it back (making the minimum changes possible)
+			auto& viable_monitor = *viable_monitor_it;
 			if (monitor.crtc_handle != viable_monitor.crtc_handle) {
 				ADD_ATOMIC_PROPERTY(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
 				ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
@@ -275,7 +277,7 @@ void Mayday::regenerate_monitors() {
 
 		if (avadakedavra) {
 			// This label clears ALL the atomic properties, rather than the fine-grained ones above
-            // (Cleanup includes setting the CRTC to inactive etc, stopping any scanout)
+			// (Cleanup includes setting the CRTC to inactive etc, stopping any scanout)
 			ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"), 0);
 			ADD_ATOMIC_PROPERTY(atomic_request, monitor.connector_handle, *get_property_handle(seat.device_fd, monitor.connector_handle, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"), 0);
 			ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_ID"), 0);
@@ -321,8 +323,8 @@ void Mayday::regenerate_monitors() {
 				offsets[i] = layout.offset;
 			}
 			std::uint32_t framebuffer_handle;
-            // TODO: Check if the chosen format + modifier is actually supported by the PLANE we attach the framebuffer to, see: https://docs.kernel.org/next/gpu/drm-kms.html
-            // ctrl f drm_any_plane_has_format.
+			// TODO: Check if the chosen format + modifier is actually supported by the PLANE we attach the framebuffer to, see: https://docs.kernel.org/next/gpu/drm-kms.html
+			// ctrl f drm_any_plane_has_format.
 			if (drmModeAddFB2WithModifiers(seat.device_fd, monitor.mode.hdisplay, monitor.mode.vdisplay, render.ultra_formats[0].drm_format,
 					handles, pitches, offsets, modifiers, &framebuffer_handle, DRM_MODE_FB_MODIFIERS))
 				MQ_XERRNO("Failed to create framebuffer");
@@ -391,7 +393,7 @@ void Mayday::regenerate_monitors() {
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_Y"), 0);
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_W"), monitor.mode.hdisplay);
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "CRTC_H"), monitor.mode.vdisplay);
-        // TODO - NOTICE HOW WE DON'T SET THE ENCODER - WE DON'T CONTROL THE SET ENCODER, SO WE NEED TO STOP SAVING AND CHECKFING FOR IT
+		// TODO - NOTICE HOW WE DON'T SET THE ENCODER - WE DON'T CONTROL THE SET ENCODER, SO WE NEED TO STOP SAVING AND CHECKFING FOR IT
 	}
 	// LET IT RIPPPPP!
 	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
@@ -405,8 +407,20 @@ void Mayday::regenerate_monitors() {
 
 void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle) {
 	auto& monitor = *std::ranges::find(monitors, crtc_handle, &Monitor::crtc_handle);
-	// TODO - yield on semaphore value (or export sync file rather), and then rneder inline, this will change the current definition
-	monitor.current_frame = (monitor.current_frame + 1) % monitor.frames.size(); // This is the actual frame currently being presented, so literally current
+	monitor.current_frame = increment_wrap(monitor.current_frame, static_cast<std::uint32_t>(monitor.frames.size())); // This is the actual frame currently being presented, so literally current
+
+	// Render the next frame, and pray it makes it in time
+	auto next_frame = increment_wrap(monitor.current_frame, static_cast<std::uint32_t>(monitor.frames.size()));
+	render_monitor(monitor, next_frame);
+
+    // TODO export syncfile, instead of stalling the thread
+	// auto _ = render.device.waitSemaphores(
+	// 	vk::SemaphoreWaitInfo {
+	// 		.semaphoreCount = 1,
+	// 		.pSemaphores = &*render.semaphore,
+	// 		.pValues = &monitor.frames[next_frame].semaphore_value,
+	// 	},
+	// 	std::numeric_limits<std::uint64_t>::max());
 
 	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
 	if (!atomic_request)
@@ -414,11 +428,9 @@ void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, un
 	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
 
 	ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"),
-		monitor.frames[monitor.current_frame].framebuffer_handle);
+		monitor.frames[next_frame].framebuffer_handle);
 
 	// The atomic commit already inherently leads to a page flip, DRM_MODE_PAGE_FLIP_EVENT just means notify us when it's happened
 	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
 		MQ_XERRNO("Failed attomic commit (frame update)");
-
-	render_monitor(monitor);
 }

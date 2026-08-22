@@ -49,7 +49,7 @@ class WlBufferData {
 			.dstStageMask = vk::PipelineStageFlagBits2::eNone,
 			.dstAccessMask = vk::AccessFlagBits2::eNone,
 			.oldLayout = vk::ImageLayout::eUndefined,
-			.newLayout = vk::ImageLayout::eAttachmentOptimal,
+			.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
 			// We need to tell vulkan we own the queue family now, foreign means we can't provide the original because it ain't ours
 			.srcQueueFamilyIndex = vk::QueueFamilyForeignEXT,
 			.dstQueueFamilyIndex = reality.render.queue_family_index,

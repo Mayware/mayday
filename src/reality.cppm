@@ -37,7 +37,7 @@ export struct VkFrame {
 };
 
 export struct Frame {
-	std::uint32_t semaphore_value;
+	std::uint64_t semaphore_value;
 	vk::raii::DeviceMemory memory;
 	vk::raii::Image image;
 	vk::raii::ImageView image_view;
@@ -84,11 +84,28 @@ export struct HeapBuffer {
 };
 
 export struct ArbitraryDescriptor {
-    float x;
-    float y;
-    float width;
-    float height;
-    std::uint32_t sampler_index;
+	float x;
+	float y;
+	float width;
+	float height;
+	std::uint32_t sampler_index;
+};
+
+export struct HeapProperties {
+    vk::DeviceSize driver_reserved_resource_heap_size;
+    vk::DeviceSize driver_reserved_sampler_heap_size;
+    vk::DeviceSize image_descriptor_size;
+    vk::DeviceSize sampler_descriptor_size;
+    vk::DeviceSize image_alignment;
+    vk::DeviceSize sampler_alignment;
+    // So if the arbitrary descriptor is 20 bytes, arbitrary descriptor [0-20], padding [value], image descriptor [eg. value-32]
+    // Padding added to match the required alignment
+    vk::DeviceSize image_descriptor_in_arbitrary_descriptor_offset;
+    // From one resource (as in the "Resource" struct in the shader) to the next
+    vk::DeviceSize resource_stride;
+    // Sent to the shader, only goes upto u32's. Essentially just the driver reserved size + alignment to match the descriptors
+    std::uint32_t resource_heap_start_offset;
+    std::uint32_t sampler_heap_start_offset;
 };
 
 export struct Render {
@@ -107,17 +124,17 @@ export struct Render {
 	std::vector<UltraFormat> ultra_formats;
 	HeapBuffer resource_heap;
 	HeapBuffer sampler_heap;
-	vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties;
+	HeapProperties heap_properties;
 };
 
 export struct Misc {
-    std::string device_path;
-    dev_t device_rdev;
+	std::string device_path;
+	dev_t device_rdev;
 };
 
 export class Reality {
   public:
-    Misc misc;
+	Misc misc;
 	Seat seat;
 	Udev udevd;
 	Render render;
@@ -131,4 +148,3 @@ export class Reality {
 	static std::optional<std::uint32_t> get_memory_type_index(vk::raii::PhysicalDevice& physical_device, std::uint32_t base_requirements, vk::MemoryPropertyFlags extended_requirements);
 	std::uint64_t increment_semaphore() { return ++render.semaphore_value; }
 };
-

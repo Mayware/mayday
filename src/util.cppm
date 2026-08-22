@@ -1,3 +1,5 @@
+module;
+#include <cassert>
 export module mayday.util;
 import std;
 import mayday.reality;
@@ -81,3 +83,17 @@ class Defer {
 	Defer(Fn callback) : callback(std::move(callback)) {}
 	~Defer() { callback(); }
 };
+
+export template<typename T>
+T increment_wrap(T value, T upper) {
+    return (value + 1) % upper;
+}
+
+export template<typename T> T align_to(T value, T alignment) {
+    assert(std::has_single_bit(alignment) && "Alignment must be a power of 2!");
+    auto minor = alignment - 1;
+    // Imagine alignment is 4, and value is 3. 3 + 4 = 7, so 00000111. 4-1=11 ~11 = 00. 111 & 00 = 100, which is 4.
+    // Alignment must be a power of 2 so we just have 1 bit as alignment eg, 001000, and when we -1 it becomes 000111.
+    return (value + minor) & ~minor;
+}
+

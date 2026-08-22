@@ -27,10 +27,17 @@ int main() {
 	std::exit(1);
 #endif
 
-	auto device_path = "/dev/dri/card1";
+    std::string device_path;
+    // directory_iterator does not give the entries in order
+    for (auto& entry : std::filesystem::directory_iterator("/dev/dri")) {
+        auto name = entry.path().filename().native();
+        if (name.starts_with("card")) {
+            device_path = entry.path().native();
+        }
+    }
 	// https://labex.io/lesson/device-types
 	struct stat st_info {};
-	if (stat(device_path, &st_info) == -1)
+	if (stat(device_path.c_str(), &st_info) == -1)
 		MQ_XERRNO("Failed to stat device");
 	Mayday mayday(std::move(device_path), st_info.st_rdev);
 

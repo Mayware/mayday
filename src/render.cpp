@@ -32,6 +32,7 @@ constexpr std::array required_extensions = {
 	vk::KHRExternalMemoryFdExtensionName,		// Ability to export device memory as POSIX FD's (generic)
 	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
 	vk::EXTDescriptorHeapExtensionName,			// Allows us to use descriptor heaps
+	vk::KHRShaderUntypedPointersExtensionName,	// Dependency of descriptor heaps ext
 };
 
 // Our internal image format is the 0 index, which is equivalent to vk::Format::eB8G8R8A8Unorm
@@ -324,12 +325,12 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		if (properties.properties.apiVersion < vk_version)
 			continue;
 
-        // We chose the primary node previously, ensure we have the same physical device
-        if (!drm_properties.hasPrimary)
-            continue;
-        auto rdev = makedev(drm_properties.primaryMajor, drm_properties.primaryMinor);
-        if (rdev != device_rdev)
-            continue;
+		// We chose the primary node previously, ensure we have the same physical device
+		if (!drm_properties.hasPrimary)
+			continue;
+		auto rdev = makedev(drm_properties.primaryMajor, drm_properties.primaryMinor);
+		if (rdev != device_rdev)
+			continue;
 
 		// Vulkan has the concept of `Queue Families`. Queue families is a group of queues that all have the same capabilites.
 		// Queue families will advertise capbilities such as `graphics`, `compute`, `transfer, `video decode` etc, implying their supported operations.
@@ -370,11 +371,15 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			vk::PhysicalDeviceFeatures2,
 			vk::PhysicalDeviceVulkan12Features,
 			vk::PhysicalDeviceVulkan13Features,
-			vk::PhysicalDeviceVulkan14Features>();
+			vk::PhysicalDeviceVulkan14Features,
+			vk::PhysicalDeviceDescriptorHeapFeaturesEXT,
+			vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>();
 
 		auto& supported_12 = supported.get<vk::PhysicalDeviceVulkan12Features>();
 		auto& supported_13 = supported.get<vk::PhysicalDeviceVulkan13Features>();
 		auto& supported_14 = supported.get<vk::PhysicalDeviceVulkan14Features>();
+		auto& supported_heap = supported.get<vk::PhysicalDeviceDescriptorHeapFeaturesEXT>();
+		auto& supported_untyped = supported.get<vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>();
 
 		// Allows for ImageMemoryBarrier2, SubmitInfo2, etc, just the 2ver for synchronisation stuff
 		if (supported_13.synchronization2 == false ||
@@ -390,8 +395,12 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			// It's just a bit cleaner
 			supported_14.maintenance5 == false ||
 			// https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_host_image_copy.html#_promotion_to_vulkan_1_4
-			// Lets us skip staging buffers, and upload images directly from CPU to GPU
-			supported_14.hostImageCopy == false) {
+			// Lets us skip staging buffers, and upload images directly from CPU to GPU for SHM
+			supported_14.hostImageCopy == false ||
+			// Descriptor heaps
+			supported_heap.descriptorHeap == false ||
+			// Dependency of descriptor heaps (because the heap is not one fixed type, or doesn't need to be rather)
+			supported_untyped.shaderUntypedPointers == false) {
 			continue;
 		}
 
@@ -403,21 +412,6 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	if (*physical_device == nullptr)
 		MQ_XERROR("No suitable physical GPU device was found");
 
-	// Create the logical device
-	// Enable specified features
-	vk::PhysicalDeviceVulkan14Features features_14 = {
-		.maintenance5 = true,
-		.hostImageCopy = true,
-	};
-	vk::PhysicalDeviceVulkan13Features features_13 = {
-		.pNext = &features_14,
-		.synchronization2 = true,
-		.dynamicRendering = true,
-	};
-	vk::PhysicalDeviceVulkan12Features features_12 = {
-		.pNext = &features_13,
-		.timelineSemaphore = true,
-	};
 	// Get the actual queue
 	// queue_prorities is a hint to the GPU of which queues should be favoured, if it becomes overloaded
 	// If we were using multiple queues, we could assign one 1.0f, and the other 0.2f. In the event that
@@ -429,14 +423,41 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		.pQueuePriorities = queue_priorities,
 	};
 
-	vk::DeviceCreateInfo device_info = {
-		.pNext = &features_12,
-		.queueCreateInfoCount = 1,
-		.pQueueCreateInfos = &queue_info,
-		.enabledExtensionCount = required_extensions.size(),
-		.ppEnabledExtensionNames = required_extensions.data(),
-	};
-	auto device = physical_device.createDevice(device_info);
+	// Create the logical device, enabling the Enable specified features
+	vk::StructureChain<
+		vk::DeviceCreateInfo,
+		vk::PhysicalDeviceVulkan12Features,
+		vk::PhysicalDeviceVulkan13Features,
+		vk::PhysicalDeviceVulkan14Features,
+		vk::PhysicalDeviceDescriptorHeapFeaturesEXT,
+		vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR>
+		device_chain = {
+			{
+				.queueCreateInfoCount = 1,
+				.pQueueCreateInfos = &queue_info,
+				.enabledExtensionCount = required_extensions.size(),
+				.ppEnabledExtensionNames = required_extensions.data(),
+			},
+			{
+				.timelineSemaphore = true,
+			},
+			{
+				.synchronization2 = true,
+				.dynamicRendering = true,
+			},
+			{
+				.maintenance5 = true,
+				.hostImageCopy = true,
+			},
+			{
+				.descriptorHeap = true,
+			},
+			{
+				.shaderUntypedPointers = true,
+			},
+		};
+
+	auto device = physical_device.createDevice(device_chain.get<vk::DeviceCreateInfo>());
 	auto queue = device.getQueue(queue_family_index, 0); // If we requested 5 to be made, we could get 0 through to 4
 
 	// Get what DRM modifiers our GPU supports for each DRM format
@@ -610,19 +631,42 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		};
 	};
 
-	vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties;
-	vk::PhysicalDeviceProperties2 physical_device_info = {.pNext = &heap_properties};
+	vk::PhysicalDeviceDescriptorHeapPropertiesEXT raw_heap_properties;
+	vk::PhysicalDeviceProperties2 physical_device_info = {.pNext = &raw_heap_properties};
 	physical_device.getProperties2(&physical_device_info);
 
-	constexpr std::uint64_t max_images = 1024;
-	// The driver requires a reserved memory range in each heap, for its own tracking of stuff. Hence, for whatever size we request, we just add that ReservedRange (i.e. the size it will steal from us)
-	// 32 bytes is because each image is 4 vertices, and each vertex is 8 bytes (2 float32s), hence 32 bytes.
-	// Also fyi, obviously we aren't actually writing the images into the heap, just a view of it into it (like a pointer, but image view).
-	// A sampler is a descriptor and lives entirely in the heap. But an image is not a descriptor, a descriptor for an image tells the gpu how to access the image, hence only its descriptor lives in the heap
-	vk::DeviceSize resource_heap_size = heap_properties.imageDescriptorSize * max_images + (32 * max_images) + heap_properties.minResourceHeapReservedRange;
+	// I want to do imageDescriptorAlignment here, but apparently the spir-v generated does the size instead (which must be a multiple of alignment, as it can be tightly packed)
+	// For the former and latter most, i would do alignment instead if not
+	vk::DeviceSize image_descriptor_in_arbitrary_descriptor_offset = align_to(sizeof(ArbitraryDescriptor), raw_heap_properties.imageDescriptorSize);
+    // Strude is already aligned because image_descriptor_in_arbitrary_descriptor_offset + image_descriptor_size = (image_descriptor_size*X) + image_descriptor_size
+	vk::DeviceSize resource_stride = image_descriptor_in_arbitrary_descriptor_offset + raw_heap_properties.imageDescriptorSize;
+	vk::DeviceSize resource_heap_start_offset = align_to(raw_heap_properties.minResourceHeapReservedRange, raw_heap_properties.imageDescriptorSize);
+	vk::DeviceSize sampler_heap_start_offset = align_to(raw_heap_properties.minSamplerHeapReservedRange, raw_heap_properties.samplerDescriptorSize);
+
+	// Shader only supports u32's for the offsets
+	if (resource_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
+		MQ_XERROR("Unable to cast resource heap start offset to a u32, would overflow");
+	if (sampler_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
+		MQ_XERROR("Unable to cast sampler heap start offset to a u32, would overflow");
+
+	auto heap_properties = HeapProperties {
+		.driver_reserved_resource_heap_size = raw_heap_properties.minResourceHeapReservedRange,
+		.driver_reserved_sampler_heap_size = raw_heap_properties.minSamplerHeapReservedRange,
+		.image_descriptor_size = raw_heap_properties.imageDescriptorSize,
+		.sampler_descriptor_size = raw_heap_properties.samplerDescriptorSize,
+		.image_alignment = raw_heap_properties.imageDescriptorAlignment,
+		.sampler_alignment = raw_heap_properties.samplerDescriptorAlignment,
+		.image_descriptor_in_arbitrary_descriptor_offset = image_descriptor_in_arbitrary_descriptor_offset,
+		.resource_stride = resource_stride,
+		.resource_heap_start_offset = static_cast<std::uint32_t>(resource_heap_start_offset),
+		.sampler_heap_start_offset = static_cast<std::uint32_t>(sampler_heap_start_offset),
+	};
+
+	constexpr std::uint64_t max_descriptors = 1024; // TODO collate all the global definitions
+	vk::DeviceSize resource_heap_size = heap_properties.resource_heap_start_offset + heap_properties.resource_stride * max_descriptors;
 	auto resource_heap = create_heap_buffer(resource_heap_size);
 	resource_heap.size = resource_heap_size;
-	vk::DeviceSize sampler_heap_size = heap_properties.samplerDescriptorSize * max_images + heap_properties.minSamplerHeapReservedRange;
+	vk::DeviceSize sampler_heap_size = heap_properties.sampler_heap_start_offset + heap_properties.sampler_descriptor_size * max_descriptors;
 	auto sampler_heap = create_heap_buffer(sampler_heap_size);
 	sampler_heap.size = sampler_heap_size;
 
@@ -636,8 +680,8 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	};
 
 	vk::HostAddressRangeEXT target = {
-		.address = sampler_heap.cpu_address + heap_properties.minSamplerHeapReservedRange,
-		.size = heap_properties.samplerDescriptorSize,
+		.address = sampler_heap.cpu_address + heap_properties.sampler_heap_start_offset,
+		.size = heap_properties.sampler_descriptor_size,
 	};
 
 	device.writeSamplerDescriptorsEXT(std::array {sampler_create_info}, std::array {target});
@@ -692,8 +736,8 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	};
 }
 
-void Mayday::render_monitor(Monitor& monitor) {
-	auto& frame = monitor.frames[(monitor.current_frame + 1) % monitor.frames.size()]; // We render into the next frame
+void Mayday::render_monitor(Monitor& monitor, std::uint32_t frame_index) {
+	auto& frame = monitor.frames[frame_index]; // We render into the next frame
 	auto& command_buffer = monitor.command.buffers[0];
 
 	// Write the images views
@@ -726,7 +770,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 						scale_height = static_cast<float>(inner.height) / monitor.mode.vdisplay;
 					}
 
-					auto arbitrary_descriptor_address = render.resource_heap.cpu_address + render.heap_properties.minResourceHeapReservedRange + (i * (sizeof(ArbitraryDescriptor) + render.heap_properties.imageDescriptorSize));
+					auto arbitrary_descriptor_address = render.resource_heap.cpu_address + render.heap_properties.resource_heap_start_offset + (i * render.heap_properties.resource_stride);
 					auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(arbitrary_descriptor_address);
 					*arbitrary = ArbitraryDescriptor {
 						.x = 0,
@@ -763,8 +807,8 @@ void Mayday::render_monitor(Monitor& monitor) {
 					};
 
 					vk::HostAddressRangeEXT target = {
-						.address = arbitrary_descriptor_address + sizeof(ArbitraryDescriptor), // Write after the arbitrary
-						.size = render.heap_properties.imageDescriptorSize,
+						.address = arbitrary_descriptor_address + render.heap_properties.image_descriptor_in_arbitrary_descriptor_offset,
+						.size = render.heap_properties.image_descriptor_size,
 					};
 
 					render.device.writeResourceDescriptorsEXT(std::array {resource_descriptor_info}, std::array {target});
@@ -823,9 +867,9 @@ void Mayday::render_monitor(Monitor& monitor) {
 		.storeOp = vk::AttachmentStoreOp::eStore,
 		.clearValue = vk::ClearColorValue {
 			std::array {
-				15.f / 255.f,
-				15.f / 255.f,
-				15.f / 255.f,
+				1.0f,
+				0.0f,
+				1.0f,
 				1.0f,
 			},
 		},
@@ -896,7 +940,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 			.size = render.resource_heap.size,
 		},
 		.reservedRangeOffset = 0,
-		.reservedRangeSize = render.heap_properties.minResourceHeapReservedRange,
+		.reservedRangeSize = render.heap_properties.driver_reserved_resource_heap_size,
 	});
 	command_buffer.bindSamplerHeapEXT(vk::BindHeapInfoEXT {
 		.heapRange = vk::DeviceAddressRangeEXT {
@@ -904,7 +948,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 			.size = render.sampler_heap.size,
 		},
 		.reservedRangeOffset = 0,
-		.reservedRangeSize = render.heap_properties.minSamplerHeapReservedRange,
+		.reservedRangeSize = render.heap_properties.driver_reserved_sampler_heap_size,
 	});
 
 	struct {
@@ -912,9 +956,8 @@ void Mayday::render_monitor(Monitor& monitor) {
 		std::uint32_t resource_heap_offset;
 		std::uint32_t sampler_heap_offset;
 	} push_data = {
-		// We're forced to narrow, our structured descriptor heap vulkan ext doesn't support 64 bit ext's TODO put a check on get_shit
-		.resource_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minResourceHeapReservedRange),
-		.sampler_heap_offset = static_cast<std::uint32_t>(render.heap_properties.minSamplerHeapReservedRange),
+		.resource_heap_offset = render.heap_properties.resource_heap_start_offset,
+		.sampler_heap_offset = render.heap_properties.sampler_heap_start_offset,
 	};
 
 	// https://docs.vulkan.org/refpages/latest/refpages/source/VkPushDataInfoEXT.html
@@ -926,7 +969,7 @@ void Mayday::render_monitor(Monitor& monitor) {
 		},
 	});
 
-	command_buffer.draw(6, i, 0, 0);
+	command_buffer.draw(6, 0, 0, 0); // ASDDDDDDDDDDDDDDDDDDDDHJADFSHJLFLSDLHJASLASFLHJSDHJLLASFHDLHJSDJFAHDSLFJHASDLJKFHASLDKFJHAS TODO SET THIS BACK TO i
 
 	command_buffer.endRendering();
 	command_buffer.end();

@@ -218,7 +218,7 @@ class WlSurfaceData {
                     // Now check if the dmabuf has been transitioned yet
                     if (!data.dmabuf.has_value()) {
                         // Haven't started the transition, start it, can't apply
-                        data.start_dmabuf_layout_transition(reality);
+                        data.dmabuf = data.start_dmabuf_layout_transition(reality);
                         return false;
                     } else {
                         // We've started the transition, see if it's finished
