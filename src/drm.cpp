@@ -403,15 +403,26 @@ void Mayday::regenerate_monitors() {
 	// std::move on a vector only marks the vector itself as an rvalue, getting a .begin() still gives T&
 	// std::vieww::as_rvalues also makes the it's rvalues too, so it does move the contents
 	monitors.append_range(new_monitors | std::views::as_rvalue);
+
+    // Regenerate the heaps, so they're properly sized now
+    regenerate_heaps();
 }
 
 void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle) {
-	auto& monitor = *std::ranges::find(monitors, crtc_handle, &Monitor::crtc_handle);
-	monitor.current_frame = increment_wrap(monitor.current_frame, static_cast<std::uint32_t>(monitor.frames.size())); // This is the actual frame currently being presented, so literally current
+    std::uint32_t monitor_index;
+    for (int i = 0; i < monitors.size(); ++i) {
+        if (monitors[i].crtc_handle == crtc_handle) {
+            monitor_index = i;
+            break;
+        }
+    }
+    auto& monitor = monitors[monitor_index];
+    auto frame_count = static_cast<std::uint32_t>(monitor.frames.size());
+	monitor.current_frame = increment_wrap(monitor.current_frame, frame_count); // This is the actual frame currently being presented, so literally current
 
 	// Render the next frame, and pray it makes it in time
-	auto next_frame = increment_wrap(monitor.current_frame, static_cast<std::uint32_t>(monitor.frames.size()));
-	render_monitor(monitor, next_frame);
+	auto next_frame = increment_wrap(monitor.current_frame, frame_count);
+	render_monitor(monitor_index, next_frame);
 
     // TODO export syncfile, instead of stalling the thread
 	// auto _ = render.device.waitSemaphores(

@@ -199,7 +199,7 @@ class WlSurfaceData {
                         // The kernel keeps track of read fences, and write fences for a dmabuf (implicit sync apis, such as opengl, will automatically append
                         // the relevant fence on command submission). A syncfile is a fence, which tracks all those fences where relevant (eg. we do it with read
                         // flags, so we only care about fences that are writing). Hence by seeing if the syncfile is signalled, we know if they all are
-						for (auto fd : (*data.inner).plane_fds) {
+						for (auto fd : data.inner.plane_fds) {
 							dma_buf_export_sync_file export_request = {
 								.flags = DMA_BUF_SYNC_READ,
 							};
@@ -225,6 +225,9 @@ class WlSurfaceData {
                         if ((*data.dmabuf).semaphore_value > reality.render.semaphore.getCounterValue()) {
                             // Hasn't yet finished, can't apply
                             return false;
+                        } else {
+                            // Has finished, return the command pool
+                            reality.donate_pool(std::move(*(*data.dmabuf).command));
                         }
                     }
 

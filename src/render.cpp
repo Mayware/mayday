@@ -569,7 +569,7 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		.pColorAttachmentFormats = &ultra_formats[0].vk_format,
 	};
 
-	// How to rasterize the traingles
+	// How to rasterise the triangles
 	vk::PipelineRasterizationStateCreateInfo rasterisation_info = {
 		// It defaults to filling the triangle (we could set it to draw the lines, or draw the vertices instead)
 		// I've explicitly put it here to be obvious
@@ -587,104 +587,6 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	};
 
 	auto semaphore = device.createSemaphore(vk::SemaphoreCreateInfo {.pNext = &semaphore_info});
-
-	// Create sampler + resource heaps
-	auto create_heap_buffer = [&device, &physical_device](std::uint64_t size) -> HeapBuffer {
-		// Buffer for descriptor heap
-		// https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferCreateInfo.html
-		// https://docs.vulkan.org/spec/latest/chapters/resources.html - What counts as a resource (basically, buffers, images)
-		// basically, a resource is the underlying data. Samplers are not resources, hence their own heap since they aren't actually data in the same sense
-		// of an image, but rather, just configuration more like what an image view is.
-		auto buffer = device.createBuffer(vk::BufferCreateInfo {
-			.size = size,
-			.usage = vk::BufferUsageFlagBits::eDescriptorHeapEXT | vk::BufferUsageFlagBits::eShaderDeviceAddress, // 2nd one lets us get the address of the buffer, which we can then use directly in shaders
-		});
-		auto requirements = buffer.getMemoryRequirements();
-		auto memory_type_index = get_memory_type_index(physical_device, requirements.memoryTypeBits,
-			// Host coherent means that it automatically flushes after we write on the CPU side
-			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal);
-		if (!memory_type_index.has_value())
-			MQ_XERROR("No appropriate image memory found");
-
-		vk::StructureChain<vk::MemoryAllocateInfo, vk::MemoryAllocateFlagsInfo> chain = {
-			{
-				.allocationSize = requirements.size,
-				.memoryTypeIndex = *memory_type_index,
-			},
-			{
-				// eDeviceAddress specifies this memory can be attached to a buffer created with the eShaderDeviceAddress usage bit
-				.flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
-			},
-		};
-
-		auto memory = device.allocateMemory(chain.get<vk::MemoryAllocateInfo>());
-		buffer.bindMemory(memory, 0);
-		auto buffer_address = device.getBufferAddress(vk::BufferDeviceAddressInfo {.buffer = buffer});
-		std::byte* cpu_address = static_cast<std::byte*>(memory.mapMemory(0, requirements.size)); // Map it into our process memory
-																								  // Remember, when using this buffer, the lowest address is actually mapped + reserved_size, not just mapped
-
-		return HeapBuffer {
-			.memory = std::move(memory),
-			.gpu_address = std::move(buffer_address),
-			.cpu_address = std::move(cpu_address),
-			.buffer = std::move(buffer),
-		};
-	};
-
-	vk::PhysicalDeviceDescriptorHeapPropertiesEXT raw_heap_properties;
-	vk::PhysicalDeviceProperties2 physical_device_info = {.pNext = &raw_heap_properties};
-	physical_device.getProperties2(&physical_device_info);
-
-	// I want to do imageDescriptorAlignment here, but apparently the spir-v generated does the size instead (which must be a multiple of alignment, as it can be tightly packed)
-	// For the former and latter most, i would do alignment instead if not
-	vk::DeviceSize image_descriptor_in_arbitrary_descriptor_offset = align_to(sizeof(ArbitraryDescriptor), raw_heap_properties.imageDescriptorSize);
-    // Strude is already aligned because image_descriptor_in_arbitrary_descriptor_offset + image_descriptor_size = (image_descriptor_size*X) + image_descriptor_size
-	vk::DeviceSize resource_stride = image_descriptor_in_arbitrary_descriptor_offset + raw_heap_properties.imageDescriptorSize;
-	vk::DeviceSize resource_heap_start_offset = align_to(raw_heap_properties.minResourceHeapReservedRange, raw_heap_properties.imageDescriptorSize);
-	vk::DeviceSize sampler_heap_start_offset = align_to(raw_heap_properties.minSamplerHeapReservedRange, raw_heap_properties.samplerDescriptorSize);
-
-	// Shader only supports u32's for the offsets
-	if (resource_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
-		MQ_XERROR("Unable to cast resource heap start offset to a u32, would overflow");
-	if (sampler_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
-		MQ_XERROR("Unable to cast sampler heap start offset to a u32, would overflow");
-
-	auto heap_properties = HeapProperties {
-		.driver_reserved_resource_heap_size = raw_heap_properties.minResourceHeapReservedRange,
-		.driver_reserved_sampler_heap_size = raw_heap_properties.minSamplerHeapReservedRange,
-		.image_descriptor_size = raw_heap_properties.imageDescriptorSize,
-		.sampler_descriptor_size = raw_heap_properties.samplerDescriptorSize,
-		.image_alignment = raw_heap_properties.imageDescriptorAlignment,
-		.sampler_alignment = raw_heap_properties.samplerDescriptorAlignment,
-		.image_descriptor_in_arbitrary_descriptor_offset = image_descriptor_in_arbitrary_descriptor_offset,
-		.resource_stride = resource_stride,
-		.resource_heap_start_offset = static_cast<std::uint32_t>(resource_heap_start_offset),
-		.sampler_heap_start_offset = static_cast<std::uint32_t>(sampler_heap_start_offset),
-	};
-
-	constexpr std::uint64_t max_descriptors = 1024; // TODO collate all the global definitions
-	vk::DeviceSize resource_heap_size = heap_properties.resource_heap_start_offset + heap_properties.resource_stride * max_descriptors;
-	auto resource_heap = create_heap_buffer(resource_heap_size);
-	resource_heap.size = resource_heap_size;
-	vk::DeviceSize sampler_heap_size = heap_properties.sampler_heap_start_offset + heap_properties.sampler_descriptor_size * max_descriptors;
-	auto sampler_heap = create_heap_buffer(sampler_heap_size);
-	sampler_heap.size = sampler_heap_size;
-
-	// Write the samplers into the heap (samplers do stuff like choosing filtering, anisotropy, scaling etc)
-	// Most formats can use this default sampler, but when we do ycbrsomething (the one wth brightness plane, two colour planes),
-	// it has a special sampler, so we'll add that when required (TODO)
-	// https://docs.vulkan.org/spec/latest/chapters/samplers.html#VkSamplerCreateInfo
-	vk::SamplerCreateInfo sampler_create_info = {
-		.magFilter = vk::Filter::eLinear,
-		.minFilter = vk::Filter::eLinear,
-	};
-
-	vk::HostAddressRangeEXT target = {
-		.address = sampler_heap.cpu_address + heap_properties.sampler_heap_start_offset,
-		.size = heap_properties.sampler_descriptor_size,
-	};
-
-	device.writeSamplerDescriptorsEXT(std::array {sampler_create_info}, std::array {target});
 
 	vk::PipelineCreateFlags2CreateInfo flags_create_info = {
 		.pNext = &pipeline_rendering_info,
@@ -730,18 +632,122 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		.graphics_pipeline = std::move(graphics_pipeline),
 		.semaphore = std::move(semaphore),
 		.ultra_formats = std::move(ultra_formats),
-		.resource_heap = std::move(resource_heap),
-		.sampler_heap = std::move(sampler_heap),
-		.heap_properties = std::move(heap_properties),
 	};
 }
 
-void Mayday::render_monitor(Monitor& monitor, std::uint32_t frame_index) {
+void Mayday::regenerate_heaps() {
+	// Create sampler + resource heaps
+	auto create_heap_buffer = [this](std::uint64_t size) -> HeapBuffer {
+		// Buffer for descriptor heap
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferCreateInfo.html
+		// https://docs.vulkan.org/spec/latest/chapters/resources.html - What counts as a resource (basically, buffers, images)
+		// basically, a resource is the underlying data. Samplers are not resources, hence their own heap since they aren't actually data in the same sense
+		// of an image, but rather, just configuration more like what an image view is.
+		auto buffer = render.device.createBuffer(vk::BufferCreateInfo {
+			.size = size,
+			.usage = vk::BufferUsageFlagBits::eDescriptorHeapEXT | vk::BufferUsageFlagBits::eShaderDeviceAddress, // 2nd one lets us get the address of the buffer, which we can then use directly in shaders
+		});
+		auto requirements = buffer.getMemoryRequirements();
+		auto memory_type_index = get_memory_type_index(render.physical_device, requirements.memoryTypeBits,
+			// Host coherent means that it automatically flushes after we write on the CPU side
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal);
+		if (!memory_type_index.has_value())
+			MQ_XERROR("No appropriate image memory found");
+
+		vk::StructureChain<vk::MemoryAllocateInfo, vk::MemoryAllocateFlagsInfo> chain = {
+			{
+				.allocationSize = requirements.size,
+				.memoryTypeIndex = *memory_type_index,
+			},
+			{
+				// eDeviceAddress specifies this memory can be attached to a buffer created with the eShaderDeviceAddress usage bit
+				.flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+			},
+		};
+
+		auto memory = render.device.allocateMemory(chain.get<vk::MemoryAllocateInfo>());
+		buffer.bindMemory(memory, 0);
+		auto buffer_address = render.device.getBufferAddress(vk::BufferDeviceAddressInfo {.buffer = buffer});
+		std::byte* cpu_address = static_cast<std::byte*>(memory.mapMemory(0, requirements.size)); // Map it into our process memory
+																								  // Remember, when using this buffer, the lowest address is actually mapped + reserved_size, not just mapped
+
+		return HeapBuffer {
+			.memory = std::move(memory),
+			.gpu_address = std::move(buffer_address),
+			.cpu_address = std::move(cpu_address),
+			.buffer = std::move(buffer),
+		};
+	};
+
+	vk::PhysicalDeviceDescriptorHeapPropertiesEXT raw_heap_properties;
+	vk::PhysicalDeviceProperties2 physical_device_info = {.pNext = &raw_heap_properties};
+	render.physical_device.getProperties2(&physical_device_info);
+
+	// I want to do imageDescriptorAlignment here, but apparently the spir-v generated does the size instead (which must be a multiple of alignment, as it can be tightly packed)
+	// For the former and latter most, i would do alignment instead if not
+	vk::DeviceSize image_descriptor_in_arbitrary_descriptor_offset = align_to(sizeof(ArbitraryDescriptor), raw_heap_properties.imageDescriptorSize);
+	// Strude is already aligned because image_descriptor_in_arbitrary_descriptor_offset + image_descriptor_size = (image_descriptor_size*X) + image_descriptor_size
+	vk::DeviceSize resource_stride = image_descriptor_in_arbitrary_descriptor_offset + raw_heap_properties.imageDescriptorSize;
+	vk::DeviceSize resource_heap_start_offset = align_to(raw_heap_properties.minResourceHeapReservedRange, raw_heap_properties.imageDescriptorSize);
+	vk::DeviceSize sampler_heap_start_offset = align_to(raw_heap_properties.minSamplerHeapReservedRange, raw_heap_properties.samplerDescriptorSize);
+
+	// Shader only supports u32's for the offsets
+	if (resource_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
+		MQ_XERROR("Unable to cast resource heap start offset to a u32, would overflow");
+	if (sampler_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
+		MQ_XERROR("Unable to cast sampler heap start offset to a u32, would overflow");
+
+	auto heap_properties = HeapProperties {
+		.driver_reserved_resource_heap_size = raw_heap_properties.minResourceHeapReservedRange,
+		.driver_reserved_sampler_heap_size = raw_heap_properties.minSamplerHeapReservedRange,
+		.image_descriptor_size = raw_heap_properties.imageDescriptorSize,
+		.sampler_descriptor_size = raw_heap_properties.samplerDescriptorSize,
+		.image_alignment = raw_heap_properties.imageDescriptorAlignment,
+		.sampler_alignment = raw_heap_properties.samplerDescriptorAlignment,
+		.image_descriptor_in_arbitrary_descriptor_offset = image_descriptor_in_arbitrary_descriptor_offset,
+		.resource_stride = resource_stride,
+		.resource_heap_start_offset = static_cast<std::uint32_t>(resource_heap_start_offset),
+		.sampler_heap_start_offset = static_cast<std::uint32_t>(sampler_heap_start_offset),
+	};
+
+	// that number of resource descriptors, per monitor
+	vk::DeviceSize resource_heap_size = heap_properties.resource_heap_start_offset + heap_properties.resource_stride * (HeapProperties::resources_per_monitor * monitors.size());
+	auto resource_heap = create_heap_buffer(resource_heap_size);
+	resource_heap.size = resource_heap_size;
+	// Only 1 sampler, currently
+	vk::DeviceSize sampler_heap_size = heap_properties.sampler_heap_start_offset + heap_properties.sampler_descriptor_size * 1;
+	auto sampler_heap = create_heap_buffer(sampler_heap_size);
+	sampler_heap.size = sampler_heap_size;
+
+	// Write the samplers into the heap (samplers do stuff like choosing filtering, anisotropy, scaling etc)
+	// Most formats can use this default sampler, but when we do ycbrsomething (the one wth brightness plane, two colour planes),
+	// it has a special sampler, so we'll add that when required (TODO)
+	// https://docs.vulkan.org/spec/latest/chapters/samplers.html#VkSamplerCreateInfo
+	// https://docs.vulkan.org/spec/latest/chapters/samplers.html
+	vk::SamplerCreateInfo sampler_create_info = {
+		.magFilter = vk::Filter::eLinear,
+		.minFilter = vk::Filter::eLinear,
+	};
+	vk::HostAddressRangeEXT target = {
+		.address = sampler_heap.cpu_address + heap_properties.sampler_heap_start_offset,
+		.size = heap_properties.sampler_descriptor_size,
+	};
+	render.device.writeSamplerDescriptorsEXT(std::array {sampler_create_info}, std::array {target});
+
+	render.resource_heap = std::move(resource_heap);
+	render.sampler_heap = std::move(sampler_heap);
+	render.heap_properties = std::move(heap_properties);
+}
+
+void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_index) {
+	auto& monitor = monitors[monitor_index];
 	auto& frame = monitor.frames[frame_index]; // We render into the next frame
 	auto& command_buffer = monitor.command.buffers[0];
 
 	// Write the images views
 	std::uint32_t i = 0;
+    // We could cache this, and should somewhere TODO
+    auto resource_start_offset = render.resource_heap.cpu_address + render.heap_properties.resource_heap_start_offset + (monitor_index * HeapProperties::resources_per_monitor) * render.heap_properties.resource_stride;
 	for (auto& client : server.clients) {
 		for (auto& object : client.get()->objects) {
 			auto& interface = std::get<1>(object.second);
@@ -753,7 +759,6 @@ void Mayday::render_monitor(Monitor& monitor, std::uint32_t frame_index) {
 				if (surface_data.buffer_friends.buffer && *surface_data.buffer_friends.buffer) {
 					auto key = **surface_data.buffer_friends.buffer;
 					auto& buffer_data = gimme_data<WlBufferData>(client->get_object<WlBuffer>(key));
-					auto& inner = (*buffer_data.inner);
 
 					// TODO - Only allow surfaces that are on this monitor and buffer scale
 					float scale_width, scale_height, scale_x = 0, scale_y = 0;
@@ -766,11 +771,11 @@ void Mayday::render_monitor(Monitor& monitor, std::uint32_t frame_index) {
 						scale_y = static_cast<float>(geometry.y) / monitor.mode.vdisplay;
 					} else {
 						// Geometry is buffer inffered
-						scale_width = static_cast<float>(inner.width) / monitor.mode.hdisplay;
-						scale_height = static_cast<float>(inner.height) / monitor.mode.vdisplay;
+						scale_width = static_cast<float>(buffer_data.inner.width) / monitor.mode.hdisplay;
+						scale_height = static_cast<float>(buffer_data.inner.height) / monitor.mode.vdisplay;
 					}
 
-					auto arbitrary_descriptor_address = render.resource_heap.cpu_address + render.heap_properties.resource_heap_start_offset + (i * render.heap_properties.resource_stride);
+					auto arbitrary_descriptor_address = resource_start_offset + (i * render.heap_properties.resource_stride);
 					auto* arbitrary = reinterpret_cast<ArbitraryDescriptor*>(arbitrary_descriptor_address);
 					*arbitrary = ArbitraryDescriptor {
 						.x = 0,
@@ -781,10 +786,10 @@ void Mayday::render_monitor(Monitor& monitor, std::uint32_t frame_index) {
 					};
 
 					vk::ImageViewCreateInfo view_info = {
-						.image = inner.image,
+						.image = buffer_data.inner.image,
 						.viewType = vk::ImageViewType::e2D,
-						.format = inner.ultra_format.vk_format,
-						.components = inner.ultra_format.vk_swizzed,
+						.format = buffer_data.inner.ultra_format.vk_format,
+						.components = buffer_data.inner.ultra_format.vk_swizzed,
 						.subresourceRange = {
 							.aspectMask = vk::ImageAspectFlagBits::eColor,
 							.baseMipLevel = 0,
@@ -969,7 +974,7 @@ void Mayday::render_monitor(Monitor& monitor, std::uint32_t frame_index) {
 		},
 	});
 
-	command_buffer.draw(6, 0, 0, 0); // ASDDDDDDDDDDDDDDDDDDDDHJADFSHJLFLSDLHJASLASFLHJSDHJLLASFHDLHJSDJFAHDSLFJHASDLJKFHASLDKFJHAS TODO SET THIS BACK TO i
+	command_buffer.draw(6, i, 0, 0);
 
 	command_buffer.endRendering();
 	command_buffer.end();

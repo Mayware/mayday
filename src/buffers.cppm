@@ -9,7 +9,7 @@ struct WlBufferDataInner {
     std::uint32_t height;
 	std::vector<int> plane_fds;
 	std::vector<vk::raii::DeviceMemory> memories;
-	vk::raii::Image image;
+	vk::raii::Image image = nullptr;
     UltraFormat ultra_format;
 };
 
@@ -34,7 +34,7 @@ class WlBufferData {
   public:
 	std::optional<Shm> shm;
 	std::optional<Dmabuf> dmabuf;
-	std::optional<WlBufferDataInner> inner;
+	WlBufferDataInner inner; // Will not be initialised, until shm / dmabuf has done their shit
 
 	// Constructor for shm (ie. threaded)
 	WlBufferData(std::function<WlBufferDataInner()> kicker) : shm(std::move(kicker)) {}
@@ -53,7 +53,7 @@ class WlBufferData {
 			// We need to tell vulkan we own the queue family now, foreign means we can't provide the original because it ain't ours
 			.srcQueueFamilyIndex = vk::QueueFamilyForeignEXT,
 			.dstQueueFamilyIndex = reality.render.queue_family_index,
-			.image = (*inner).image,
+			.image = inner.image,
 			.subresourceRange = {
 				.aspectMask = vk::ImageAspectFlagBits::eColor,
 				.baseMipLevel = 0,

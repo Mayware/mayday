@@ -76,11 +76,11 @@ export struct UltraFormat {
 };
 
 export struct HeapBuffer {
-	vk::raii::DeviceMemory memory;
+	vk::raii::DeviceMemory memory = nullptr;
 	vk::DeviceAddress gpu_address;
 	vk::DeviceSize size;
 	std::byte* cpu_address;
-	vk::raii::Buffer buffer;
+	vk::raii::Buffer buffer = nullptr;
 };
 
 export struct ArbitraryDescriptor {
@@ -92,6 +92,8 @@ export struct ArbitraryDescriptor {
 };
 
 export struct HeapProperties {
+    static constexpr std::uint32_t resources_per_monitor = 1024;
+
     vk::DeviceSize driver_reserved_resource_heap_size;
     vk::DeviceSize driver_reserved_sampler_heap_size;
     vk::DeviceSize image_descriptor_size;

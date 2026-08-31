@@ -31,7 +31,8 @@ export class Mayday : public Reality {
 	// Gets the vulkan "objects"
 	static Render get_shit(dev_t device_rdev);
 	VkMonitor get_vk_monitor(std::uint32_t width, std::uint32_t height, std::uint32_t frame_count);
-    void render_monitor(Monitor& monitor, std::uint32_t frame_index);
+    void render_monitor(std::uint32_t monitor_index, std::uint32_t frame_index);
+    void regenerate_heaps(); // Regenerate the resource + sampler heaps (and heap_properties)
 
   public:
 	/* Mainly drm shit */
