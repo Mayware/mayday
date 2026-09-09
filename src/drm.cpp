@@ -3,19 +3,19 @@ module;
 #include <fcntl.h>
 #include <mayday/libseat.h>
 #include <mayday/macros.h>
-#include <mayquill/logger.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 module mayday;
+import logger;
 import mayday.util;
 import mayquill;
 import std;
 
 #define ADD_ATOMIC_PROPERTY(...)                   \
 	if (drmModeAtomicAddProperty(__VA_ARGS__) < 0) \
-		MQ_XERRNO("Failed to add an atomic property");
+		fail<Er, No>([] { return "Failed to add an atomic property"; });
 
 /*
  *  Framebuffer -> Plane -> CRTC -> Encoder -> Connector
@@ -110,13 +110,13 @@ void Mayday::regenerate_monitors() {
 	// https://manpages.debian.org/testing/libdrm-dev/drmModeGetResources.3.en.html
 	drmModeRes* resources = drmModeGetResources(seat.device_fd);
 	if (!resources)
-		MQ_XERRNO("Failed to get resources");
+		fail<Er, No>([] { return "Failed to get resources"; });
 	DEFER([resources]() { drmModeFreeResources(resources); });
 
 	// Same, but for planes
 	drmModePlaneRes* plane_resources = drmModeGetPlaneResources(seat.device_fd);
 	if (!plane_resources)
-		MQ_XERRNO("Failed to get plane resources");
+		fail<Er, No>([] { return "Failed to get plane resources"; });
 	DEFER([plane_resources]() { drmModeFreePlaneResources(plane_resources); });
 
 	for (int i = 0; i < resources->count_connectors; ++i) {
@@ -174,7 +174,7 @@ void Mayday::regenerate_monitors() {
 			}
 		}
 		if (crtc_index == -1)
-			MQ_XERROR("Failed to find matching CRTC");
+			fail<Er>([] { return "Failed to find matching CRTC"; });
 
 		std::uint32_t plane_handle = 0; // handles cannot be 0. Only the handle is later needed, hence why we don't store the full object
 		for (int i = 0; i < plane_resources->count_planes; ++i) {
@@ -195,7 +195,7 @@ void Mayday::regenerate_monitors() {
 			}
 		}
 		if (!plane_handle)
-			MQ_XERROR("Failed to find primary plane");
+			fail<Er>([] { return "Failed to find primary plane"; });
 
 		std::uint32_t connector_handle = connector->connector_id;
 
@@ -213,7 +213,7 @@ void Mayday::regenerate_monitors() {
 	// for destroyed monitors, or ones that changed to use a different one
 	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
 	if (!atomic_request)
-		MQ_XERROR("Failed to allocate atomic request");
+		fail<Er>([] { return "Failed to allocate atomic request"; });
 	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
 
 	// Check if current monitors match viable monitors. This pass removes monitors that don't have a match in viable_monitors, or differ to their matching
@@ -304,7 +304,7 @@ void Mayday::regenerate_monitors() {
 			DEFER([fd = vk_frame.dmabuf_fd]() { close(fd); });
 			std::uint32_t gem_handle;
 			if (drmPrimeFDToHandle(seat.device_fd, vk_frame.dmabuf_fd, &gem_handle) < 0)
-				MQ_XERRNO("Failed to import dmabuf into monitor");
+				fail<Er, No>([] { return "Failed to import dmabuf into monitor"; });
 			// We won't need the GEM handle after we get the framebuffer handle (using the GEM handle to get that, in the first place)
 			DEFER([fd = seat.device_fd, handle = gem_handle]() { drmCloseBufferHandle(fd, handle); });
 
@@ -327,7 +327,7 @@ void Mayday::regenerate_monitors() {
 			// ctrl f drm_any_plane_has_format.
 			if (drmModeAddFB2WithModifiers(seat.device_fd, monitor.mode.hdisplay, monitor.mode.vdisplay, render.ultra_formats[0].drm_format,
 					handles, pitches, offsets, modifiers, &framebuffer_handle, DRM_MODE_FB_MODIFIERS))
-				MQ_XERRNO("Failed to create framebuffer");
+				fail<Er, No>([] { return "Failed to create framebuffer"; });
 
 			frames.push_back(Frame {
 				.memory = std::move(vk_frame.memory),
@@ -371,7 +371,7 @@ void Mayday::regenerate_monitors() {
 		// Therefore, we use drmModeCreatePropertyBlob to upload the mode struct to the kernel, which will then give us an id/handle to use to refer to it.
 		std::uint32_t mode_blob_handle;
 		if (drmModeCreatePropertyBlob(seat.device_fd, &monitor.mode, sizeof(monitor.mode), &mode_blob_handle))
-			MQ_XERRNO("Failed to create mode property blob");
+			fail<Er, No>([] { return "Failed to create mode property blob"; });
 		mode_blob_handles.push_back(mode_blob_handle);
 		ADD_ATOMIC_PROPERTY(atomic_request, monitor.crtc_handle, *get_property_handle(seat.device_fd, monitor.crtc_handle, DRM_MODE_OBJECT_CRTC, "MODE_ID"), mode_blob_handle);
 		// Assign the frame buffer to the plane
@@ -397,34 +397,34 @@ void Mayday::regenerate_monitors() {
 	}
 	// LET IT RIPPPPP!
 	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
-		MQ_XERRNO("Failed attomic commit");
+		fail<Er, No>([] { return "Failed attomic commit"; });
 
 	// New monitors are completely initialised now (God willing)
 	// std::move on a vector only marks the vector itself as an rvalue, getting a .begin() still gives T&
 	// std::vieww::as_rvalues also makes the it's rvalues too, so it does move the contents
 	monitors.append_range(new_monitors | std::views::as_rvalue);
 
-    // Regenerate the heaps, so they're properly sized now
-    regenerate_heaps();
+	// Regenerate the heaps, so they're properly sized now
+	regenerate_heaps();
 }
 
 void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, unsigned int crtc_handle) {
-    std::uint32_t monitor_index;
-    for (int i = 0; i < monitors.size(); ++i) {
-        if (monitors[i].crtc_handle == crtc_handle) {
-            monitor_index = i;
-            break;
-        }
-    }
-    auto& monitor = monitors[monitor_index];
-    auto frame_count = static_cast<std::uint32_t>(monitor.frames.size());
+	std::uint32_t monitor_index;
+	for (int i = 0; i < monitors.size(); ++i) {
+		if (monitors[i].crtc_handle == crtc_handle) {
+			monitor_index = i;
+			break;
+		}
+	}
+	auto& monitor = monitors[monitor_index];
+	auto frame_count = static_cast<std::uint32_t>(monitor.frames.size());
 	monitor.current_frame = increment_wrap(monitor.current_frame, frame_count); // This is the actual frame currently being presented, so literally current
 
 	// Render the next frame, and pray it makes it in time
 	auto next_frame = increment_wrap(monitor.current_frame, frame_count);
 	render_monitor(monitor_index, next_frame);
 
-    // TODO export syncfile, instead of stalling the thread
+	// TODO export syncfile, instead of stalling the thread
 	// auto _ = render.device.waitSemaphores(
 	// 	vk::SemaphoreWaitInfo {
 	// 		.semaphoreCount = 1,
@@ -435,7 +435,7 @@ void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, un
 
 	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
 	if (!atomic_request)
-		MQ_XERROR("Failed to allocate atomic request");
+		fail<Er>([] { return "Failed to allocate atomic request"; });
 	DEFER([atomic_request]() { drmModeAtomicFree(atomic_request); });
 
 	ADD_ATOMIC_PROPERTY(atomic_request, monitor.plane_handle, *get_property_handle(seat.device_fd, monitor.plane_handle, DRM_MODE_OBJECT_PLANE, "FB_ID"),
@@ -443,5 +443,5 @@ void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, un
 
 	// The atomic commit already inherently leads to a page flip, DRM_MODE_PAGE_FLIP_EVENT just means notify us when it's happened
 	if (drmModeAtomicCommit(seat.device_fd, atomic_request, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT, this))
-		MQ_XERRNO("Failed attomic commit (frame update)");
+		fail<Er, No>([] { return "Failed attomic commit (frame update)"; });
 }

@@ -1,9 +1,9 @@
 #include <libudev.h>
 #include <mayday/libseat.h>
-#include <mayquill/logger.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <xf86drm.h>
+import logger;
 import mayquill;
 import mayday;
 import mayday.epoll;
@@ -19,26 +19,26 @@ void handle_vsync_wrapper(int fd, unsigned int sequence, unsigned int tv_sec, un
 int main() {
 	std::jthread exit_timer([]() {
 		std::this_thread::sleep_for(std::chrono::seconds(5));
-        std::terminate();
+		std::terminate();
 	});
 
 #ifndef MAYQUILL_ICE
 	std::println(" This is incorrect! Exiting!");
 	std::exit(1);
 #endif
-
-    std::string device_path;
-    // directory_iterator does not give the entries in order
-    for (auto& entry : std::filesystem::directory_iterator("/dev/dri")) {
-        auto name = entry.path().filename().native();
-        if (name.starts_with("card")) {
-            device_path = entry.path().native();
-        }
-    }
+	std::string device_path;
+	// directory_iterator does not give the entries in order
+	for (auto& entry : std::filesystem::directory_iterator("/dev/dri")) {
+		auto name = entry.path().filename().native();
+		if (name.starts_with("card")) {
+			device_path = entry.path().native();
+			break;
+		}
+	}
 	// https://labex.io/lesson/device-types
 	struct stat st_info {};
 	if (stat(device_path.c_str(), &st_info) == -1)
-		MQ_XERRNO("Failed to stat device");
+		fail<Er, No>([] { return "Failed to stat device"; });
 	Mayday mayday(std::move(device_path), st_info.st_rdev);
 
 	char* argv[] = {(char*)"havoc", nullptr};

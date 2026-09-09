@@ -47,8 +47,9 @@ Command Reality::beg_pool(std::uint32_t buffer_count) {
 
 	// No free command pool exists, we'll have to make a bespoke
 	vk::CommandPoolCreateInfo command_pool_info = {
-		// the buffers won't live for a long time, hint to the driver
-		.flags = vk::CommandPoolCreateFlagBits::eTransient,
+		// the buffers won't live for a long time, hint to the driver, and that we may reset individual buffers from a pool
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkCommandPoolCreateFlagBits.html
+		.flags = vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
 		// Buffers can be submitted to any queue in the same family
 		.queueFamilyIndex = render.queue_family_index,
 	};
@@ -80,8 +81,8 @@ std::optional<std::uint32_t> Reality::get_memory_type_index(vk::raii::PhysicalDe
 		if ((base_requirements & (1u << i)) != 0 &&
 			// Ensure all property flags (like being device local) are satisfied
 			(memory_properties.memoryTypes[i].propertyFlags & extended_requirements) == extended_requirements) {
-            return i;
+			return i;
 		}
 	}
-    return std::nullopt;
+	return std::nullopt;
 }

@@ -7,8 +7,8 @@ import mayday.reality;
 // For variant matching
 export template<typename... Lambdas>
 struct overload : Lambdas... {
-    // To my understanding, overload resolution only works in a singlular scope, although we inherit the regular operator()'s, they're in different scopes,
-    // and so no overload resolution is done, only name resolution (which is ambiguous, since we don't do overload resolution)
+	// To my understanding, overload resolution only works in a singlular scope, although we inherit the regular operator()'s, they're in different scopes,
+	// and so no overload resolution is done, only name resolution (which is ambiguous, since we don't do overload resolution)
 	using Lambdas::operator()...;
 };
 
@@ -32,12 +32,12 @@ Reality& gimme_reality(Target&& target) {
 	if constexpr (requires { target.server.reference; }) {
 		return *static_cast<Reality*>(target.server.reference);
 	} else {
-        static_assert(false, "Unsupported source given for reality");
-    }
+		static_assert(false, "Unsupported source given for reality");
+	}
 }
 
 export std::uint64_t combine_u32s(std::uint32_t high, std::uint32_t low) {
-    return (static_cast<std::uint64_t>(high) << 32) | static_cast<std::uint64_t>(low);
+	return (static_cast<std::uint64_t>(high) << 32) | static_cast<std::uint64_t>(low);
 }
 
 // Aribtrary typelist, for example TypeList<MyTyp1, MyType2>
@@ -86,14 +86,14 @@ class Defer {
 
 export template<typename T>
 T increment_wrap(T value, T upper) {
-    return (value + 1) % upper;
+	return (value + 1) % upper;
 }
 
-export template<typename T> T align_to(T value, T alignment) {
-    assert(std::has_single_bit(alignment) && "Alignment must be a power of 2!");
-    auto minor = alignment - 1;
-    // Imagine alignment is 4, and value is 3. 3 + 4 = 7, so 00000111. 4-1=11 ~11 = 00. 111 & 00 = 100, which is 4.
-    // Alignment must be a power of 2 so we just have 1 bit as alignment eg, 001000, and when we -1 it becomes 000111.
-    return (value + minor) & ~minor;
+export template<typename T>
+T align_to(T value, T alignment) {
+	assert(std::has_single_bit(alignment) && "Alignment must be a power of 2!");
+	auto minor = alignment - 1;
+	// Imagine alignment is 4, and value is 3. 3 + 4 = 7, so 00000111. 4-1=11 ~11 = 00. 111 & 00 = 100, which is 4.
+	// Alignment must be a power of 2 so we just have 1 bit as alignment eg, 001000, and when we -1 it becomes 000111.
+	return (value + minor) & ~minor;
 }
-

@@ -2,10 +2,10 @@ module;
 #include <drm_fourcc.h>
 #include <fcntl.h>
 #include <mayday/macros.h>
-#include <mayquill/logger.h>
 #include <sys/mman.h>
 #include <unistd.h>
 module mayquill;
+import logger;
 import mayday.buffers;
 import mayday.surfaces;
 import mayday.util;
@@ -68,7 +68,7 @@ void WlShmPool::handle(Request request) {
 					}
 					auto it = std::ranges::find_if(reality.render.ultra_formats, [drm_format](const UltraFormat& format) { return format.drm_format == drm_format; });
 					if (it == reality.render.ultra_formats.end())
-						MQ_XERROR("Unable to find matching ultra format for drm format");
+						fail<Er>([] { return "Unable to find matching ultra format for drm format"; });
 					auto& ultra_format = *it;
 
 					// Skipping staging buffer via https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_host_image_copy.html#_promotion_to_vulkan_1_4
@@ -91,7 +91,7 @@ void WlShmPool::handle(Request request) {
 					auto requirements = image.getMemoryRequirements();
 					auto memory_type_index = reality.get_memory_type_index(reality.render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 					if (!memory_type_index.has_value())
-						MQ_XERROR("No appropriate image memory found");
+						fail<Er>([] { return "No appropriate image memory found"; });
 					vk::MemoryAllocateInfo allocation_info = {
 						.allocationSize = requirements.size,
 						.memoryTypeIndex = *memory_type_index,
@@ -243,12 +243,12 @@ void ZwpLinuxDmabufV1::handle(Request request) {
 		auto size = format_table.size() * sizeof(FormatEntry);
 		int fd = memfd_create("format-table", MFD_CLOEXEC);
 		if (fd == -1)
-			MQ_XERRNO("Failed to create format table fd");
+			fail<Er, No>([] { return "Failed to create format table fd"; });
 		DEFER([fd]() { close(fd); });
 		ftruncate(fd, size); // Ironically, also used to grow fd
 		auto start = static_cast<std::byte*>(mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
 		if (start == MAP_FAILED)
-			MQ_XERRNO("Failed to mmap for format table");
+			fail<Er, No>([] { return "Failed to mmap for format table"; });
 		memcpy(start, format_table.data(), size);
 		auto& feedback = client.add_object<ZwpLinuxDmabufFeedbackV1>(id).object;
 		feedback.format_table(fd, size);
@@ -301,7 +301,7 @@ WlBufferDataInner handle_dmabuf(Client& client, std::int32_t width, std::int32_t
 	auto& reality = gimme_reality(client);
 	auto it = std::ranges::find_if(reality.render.ultra_formats, [drm_format](const UltraFormat& format) { return format.drm_format == drm_format; });
 	if (it == reality.render.ultra_formats.end())
-		MQ_XERROR("Unable to find matching ultra format for drm format");
+		fail<Er>([] { return "Unable to find matching ultra format for drm format"; });
 	auto& ultra_format = *it;
 
 	// The structure type is 'specialised' on the first type you provide it. Types such as imagecreateinfo define other types that can go in their pnext.
@@ -360,7 +360,7 @@ WlBufferDataInner handle_dmabuf(Client& client, std::int32_t width, std::int32_t
 	for (int i = 0; i < plane_layouts.size(); ++i) {
 		int fd = fcntl(planes[i].fd, F_DUPFD_CLOEXEC, 0);
 		if (fd == -1)
-			MQ_XERRNO("Failed to dupe fd");
+			fail<Er, No>([] { return "Failed to dupe fd"; });
 		plane_fds.push_back(fd);
 
 		// Specify we want the requirements of the image, but just for that plane
@@ -442,7 +442,7 @@ void ZwpLinuxBufferParamsV1::handle(Request request) {
 				try {
 					inner = handle_dmabuf(client, request.width, request.height, request.format, std::move(data.planes));
 				} catch (std::exception& e) {
-					MQ_ERROR("{}", e.what());
+					log<Er>([&] { return std::format("{}", e.what()); });
 					failed();
 					return;
 				}
@@ -454,7 +454,7 @@ void ZwpLinuxBufferParamsV1::handle(Request request) {
 				try {
 					inner = handle_dmabuf(client, request.width, request.height, request.format, std::move(data.planes));
 				} catch (std::exception& e) {
-					MQ_ERROR("{}", e.what());
+					log<Er>([&] { return std::format("{}", e.what()); });
 					client.error(keyd.id, ZwpLinuxBufferParamsV1::ErrorEnum::InvalidWlBuffer, std::format("Failed to import: {}", e.what()));
 					return;
 				}

@@ -19,11 +19,11 @@ void WlDisplay::handle(Request request) {
 					   registry.object.global(4, std::string(XdgWmBase::interface), XdgWmBase::version);
 					   registry.object.global(5, std::string(ZwlrLayerShellV1::interface), ZwlrLayerShellV1::version);
 					   registry.object.global(6, std::string(WpFractionalScaleManagerV1::interface), WpFractionalScaleManagerV1::version);
-                       // registry.object.global(7, std::string(ZwpLinuxDmabufV1::interface), 5); // Can't deal with the multi-gpu shit for now
-                       registry.object.global(8, std::string(WpLinuxDrmSyncobjManagerV1::interface), WpLinuxDrmSyncobjManagerV1::version);
-                       registry.object.global(9, std::string(WpFifoManagerV1::interface), WpFifoManagerV1::version);
-                       registry.object.global(10, std::string(WpCommitTimingManagerV1::interface), WpCommitTimingManagerV1::version);
-                       registry.object.global(11, std::string(WpPresentation::interface), WpPresentation::version);
+					   // registry.object.global(7, std::string(ZwpLinuxDmabufV1::interface), 5); // Can't deal with the multi-gpu shit for now
+					   registry.object.global(8, std::string(WpLinuxDrmSyncobjManagerV1::interface), WpLinuxDrmSyncobjManagerV1::version);
+					   registry.object.global(9, std::string(WpFifoManagerV1::interface), WpFifoManagerV1::version);
+					   registry.object.global(10, std::string(WpCommitTimingManagerV1::interface), WpCommitTimingManagerV1::version);
+					   registry.object.global(11, std::string(WpPresentation::interface), WpPresentation::version);
 				   }},
 		request);
 }
@@ -39,7 +39,7 @@ void WlRegistry::handle(Request request) {
 						   client.add_object<WlSubcompositor>(request.id);
 						   break;
 					   case 3:
-                           // Only support Argb8888 fpr shm buffers
+						   // Only support Argb8888 fpr shm buffers
 						   client.add_object<WlShm>(request.id).object.format(WlShm::FormatEnum::Argb8888);
 						   break;
 					   case 4:
@@ -63,8 +63,8 @@ void WlRegistry::handle(Request request) {
 					   case 10:
 						   client.add_object<WpCommitTimingManagerV1>(request.id);
 						   break;
-                       case 11:
-                           // Our "presentation clock" is relative to CLOCK_MONOTONIC (boot time basically)
+					   case 11:
+						   // Our "presentation clock" is relative to CLOCK_MONOTONIC (boot time basically)
 						   client.add_object<WpPresentation>(request.id).object.clock_id(CLOCK_MONOTONIC);
 						   break;
 					   }

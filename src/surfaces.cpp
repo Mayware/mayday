@@ -1,7 +1,7 @@
 module;
-#include "mayquill/logger.h"
 #include <cassert>
 module mayquill;
+import logger;
 import mayday.surfaces;
 import mayday.util;
 
@@ -77,9 +77,9 @@ void WlSurface::handle(Request request) {
 						   } else if (surface_data.is_role<WlSubsurface>()) {
 							   surface_data.initial_configured = true;
 						   } else {
-							   MQ_XERROR("Incorrectly configured role");
+							   fail<Er>([] { return "Incorrectly configured role"; });
 						   }
-						   MQ_INFO("Sent initial configure");
+						   log<If>([] { return "Sent initial configure"; });
 					   }
 
 					   // if (surface_data.buffer_friends.held()) {

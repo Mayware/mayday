@@ -5,12 +5,12 @@ import mayday.reality;
 
 export namespace mayquill {
 struct WlBufferDataInner {
-    std::uint32_t width;
-    std::uint32_t height;
+	std::uint32_t width;
+	std::uint32_t height;
 	std::vector<int> plane_fds;
 	std::vector<vk::raii::DeviceMemory> memories;
 	vk::raii::Image image = nullptr;
-    UltraFormat ultra_format;
+	UltraFormat ultra_format;
 };
 
 struct Shm {
@@ -95,10 +95,10 @@ class WlBufferData {
 			.pSignalSemaphoreInfos = &signal_info,
 		});
 
-        return Dmabuf {
-            .semaphore_value = semaphore_value,
-            .command = std::move(command),
-        };
+		return Dmabuf {
+			.semaphore_value = semaphore_value,
+			.command = std::move(command),
+		};
 	}
 };
 } // namespace mayquill

@@ -1,7 +1,7 @@
 module;
-#include "mayquill/logger.h"
 #include <xf86drm.h>
 export module mayday.sync;
+import logger;
 import std;
 import mayquill;
 import mayday.util;
@@ -18,13 +18,12 @@ struct SyncobjTimelineData {
 
 struct SyncobjPoint {
 	std::uint64_t point;
-    std::shared_ptr<SyncobjTimelineData> timeline_data;
+	std::shared_ptr<SyncobjTimelineData> timeline_data;
 
 	void signal_release(std::source_location source = std::source_location::current()) {
-        // Address of handle, because it actually takes an array. Same with points
-        if (drmSyncobjTimelineSignal(timeline_data->device_fd, &timeline_data->handle, &point, 1))
-            MQ_SXERRNO(source, "Failed to signal release timeline");
-
+		// Address of handle, because it actually takes an array. Same with points
+		if (drmSyncobjTimelineSignal(timeline_data->device_fd, &timeline_data->handle, &point, 1))
+			fail<Er, No>([] { return "Failed to signal release timeline"; }, source);
 	}
 };
 

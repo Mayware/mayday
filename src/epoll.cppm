@@ -1,7 +1,7 @@
 module;
-#include <mayquill/logger.h>
 #include <sys/epoll.h>
 export module mayday.epoll;
+import logger;
 import mayquill;
 import std;
 
@@ -19,7 +19,7 @@ export class Epoll {
 	Epoll() {
 		epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 		if (epoll_fd == -1) {
-			MQ_XERROR("Failed to create epoll_fd");
+			fail<Er>([] { return "Failed to create epoll_fd"; });
 		};
 	}
 
@@ -30,13 +30,13 @@ export class Epoll {
 				.u32 = id,
 			}};
 		if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1) // will copy event
-			MQ_XERRNO("Failed to add fd {}, id {}, to epoll", fd, id);
+			fail<Er, No>([&] { return std::format("Failed to add fd {}, id {}, to epoll", fd, id); });
 	}
 
 	std::span<epoll_event> yield() {
 		int event_count = epoll_wait(epoll_fd, events.data(), events.size(), -1); // -1 means no timeout
 		if (event_count < 0)
-			MQ_XERRNO("Failed to epoll_wait");
+			fail<Er, No>([] { return "Failed to epoll_wait"; });
 		return std::span(events).first(event_count);
 	};
 
@@ -48,7 +48,7 @@ export class Epoll {
 		case Interest::Writable:
 			return EPOLLOUT;
 		default:
-			MQ_SXERROR(source, "Invalid interest provided");
+			fail<Er>([] { return "Invalid interest provided"; }, source);
 		}
 	}
 };

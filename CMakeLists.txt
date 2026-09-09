@@ -58,6 +58,9 @@ add_dependencies(mayday shaders)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mayquill ${CMAKE_CURRENT_BINARY_DIR}/mayquill)
 target_link_libraries(mayday PRIVATE mayquill)
 
+#> Maylog
+target_link_libraries(mayday PRIVATE maylog)
+
 #> Mayday
 file(GLOB_RECURSE IMPL_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB_RECURSE INTERFACE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cppm")

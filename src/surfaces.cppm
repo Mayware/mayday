@@ -1,10 +1,10 @@
 module;
 #include <linux/dma-buf.h>
-#include <mayquill/logger.h>
+#include <linux/sync_file.h>
 #include <sys/ioctl.h>
 #include <xf86drm.h>
-#include <linux/sync_file.h>
 export module mayday.surfaces;
+import logger;
 import mayquill;
 export import mayday.shell;
 export import mayday.sync;
@@ -142,7 +142,7 @@ class WlSurfaceData {
 		if (delta.buffer_friends.buffer and *delta.buffer_friends.buffer) {
 			auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer_friends.buffer));
 			// Only the shm path sets the optional. Dmabuf is uploaded immediately already
-            // data.shm being some, and inner being none means that the kicker hasn't yet been started
+			// data.shm being some, and inner being none means that the kicker hasn't yet been started
 			if (data.shm) {
 				auto& upload = *data.shm;
 				// The lock indicates that the uploader is not yet finished, it's automatically dropped at scope end
@@ -163,7 +163,7 @@ class WlSurfaceData {
 	// Checks if all deltas upto delta X in the commited queue can be applied
 	// This is recursive, as slaves will check their slaves too
 	bool can_apply_deltas(WlSurfaceDelta* limit) {
-        auto& reality = gimme_reality(client);
+		auto& reality = gimme_reality(client);
 		// Pretends to be the "real" state
 		bool accumulated_set_barrier = fifo_set_barrier;
 		for (auto& front : committed_deltas) {
@@ -176,7 +176,7 @@ class WlSurfaceData {
 			if (front.commit_timestamp && std::chrono::steady_clock::now() < *front.commit_timestamp)
 				return false;
 
-            // Check if the buffer is ready to be applied
+			// Check if the buffer is ready to be applied
 			if (front.buffer_friends.buffer && *front.buffer_friends.buffer) {
 				auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**front.buffer_friends.buffer));
 				if (data.shm) {
@@ -184,53 +184,51 @@ class WlSurfaceData {
 					// Mutex is currently locked, ie. uploader is still uploading and hasn't released, can't apply
 					if (!data.shm->lock.try_lock()) {
 						return false;
-                    } else {
-                        data.shm->lock.unlock();
-                    }
+					} else {
+						data.shm->lock.unlock();
+					}
 				} else {
 					//**Dmabuf path, yield for the acquire point, if it exists
 					if (front.buffer_friends.acquire_point) {
 						auto& point = *front.buffer_friends.acquire_point;
 						if (drmSyncobjTimelineWait(point.timeline_data.get()->device_fd, &point.timeline_data.get()->handle, &point.point, 1, 0, 0, nullptr))
-                            // Acquire point not yet reached, can't apply
+							// Acquire point not yet reached, can't apply
 							return false;
 					} else {
 						// Implicit sync path
-                        // The kernel keeps track of read fences, and write fences for a dmabuf (implicit sync apis, such as opengl, will automatically append
-                        // the relevant fence on command submission). A syncfile is a fence, which tracks all those fences where relevant (eg. we do it with read
-                        // flags, so we only care about fences that are writing). Hence by seeing if the syncfile is signalled, we know if they all are
+						// The kernel keeps track of read fences, and write fences for a dmabuf (implicit sync apis, such as opengl, will automatically append
+						// the relevant fence on command submission). A syncfile is a fence, which tracks all those fences where relevant (eg. we do it with read
+						// flags, so we only care about fences that are writing). Hence by seeing if the syncfile is signalled, we know if they all are
 						for (auto fd : data.inner.plane_fds) {
 							dma_buf_export_sync_file export_request = {
 								.flags = DMA_BUF_SYNC_READ,
 							};
 							if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &export_request))
-                                MQ_XERRNO("Failed export syncfile");
-                            sync_file_info info = {};
-                            if (ioctl(export_request.fd, SYNC_IOC_FILE_INFO, &info))
-                                MQ_XERRNO("Failed to get sync file info");
-                            if (info.status <= 0)
-                                // 0 = unsingalled, 1 = signalled, <0 = failure, hence <= 0 can't apply
-                                return false;
-
+								fail<Er, No>([] { return "Failed export syncfile"; });
+							sync_file_info info = {};
+							if (ioctl(export_request.fd, SYNC_IOC_FILE_INFO, &info))
+								fail<Er, No>([] { return "Failed to get sync file info"; });
+							if (info.status <= 0)
+								// 0 = unsingalled, 1 = signalled, <0 = failure, hence <= 0 can't apply
+								return false;
 						}
 					}
-                    // Acquire point passed
-                    // Now check if the dmabuf has been transitioned yet
-                    if (!data.dmabuf.has_value()) {
-                        // Haven't started the transition, start it, can't apply
-                        data.dmabuf = data.start_dmabuf_layout_transition(reality);
-                        return false;
-                    } else {
-                        // We've started the transition, see if it's finished
-                        if ((*data.dmabuf).semaphore_value > reality.render.semaphore.getCounterValue()) {
-                            // Hasn't yet finished, can't apply
-                            return false;
-                        } else {
-                            // Has finished, return the command pool
-                            reality.donate_pool(std::move(*(*data.dmabuf).command));
-                        }
-                    }
-
+					// Acquire point passed
+					// Now check if the dmabuf has been transitioned yet
+					if (!data.dmabuf.has_value()) {
+						// Haven't started the transition, start it, can't apply
+						data.dmabuf = data.start_dmabuf_layout_transition(reality);
+						return false;
+					} else {
+						// We've started the transition, see if it's finished
+						if ((*data.dmabuf).semaphore_value > reality.render.semaphore.getCounterValue()) {
+							// Hasn't yet finished, can't apply
+							return false;
+						} else {
+							// Has finished, return the command pool
+							reality.donate_pool(std::move(data.dmabuf.value().command.value()));
+						}
+					}
 				}
 			}
 
@@ -293,7 +291,7 @@ class WlSurfaceData {
 			if (front.buffer_friends.buffer) {
 				// Old buffer is being replaced, signal the release
 				if (buffer_friends.release_point)
-                    // TODO NEED TO EXPORT SYNC FILE AND THEN GET THAT TO SIGNAL RELEASE INSTEAD
+					// TODO NEED TO EXPORT SYNC FILE AND THEN GET THAT TO SIGNAL RELEASE INSTEAD
 					buffer_friends.release_point->signal_release();
 
 				buffer_friends = std::move(front.buffer_friends);

@@ -1,9 +1,9 @@
 module;
 #include <drm_fourcc.h>
-#include <mayquill/logger.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 module mayday;
+import logger;
 import vulkan;
 import mayquill;
 import mayday.buffers;
@@ -111,7 +111,7 @@ std::pair<vk::Format, vk::ComponentMapping> fourcc_to_vk(std::uint32_t format) {
 	case DRM_FORMAT_ARGB16161616F:
 		return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
 	default:
-		MQ_XERROR("Invalid drm format");
+		fail<Er>([] { return "Invalid drm format"; });
 	}
 }
 
@@ -119,7 +119,7 @@ std::pair<vk::Format, vk::ComponentMapping> fourcc_to_vk(std::uint32_t format) {
 std::vector<std::uint32_t> read_spirv(std::string name) {
 	std::ifstream stream("build/shaders/" + name + ".spv", std::ios::binary | std::ios::ate); // (ate means open file, at the end)
 	if (!stream)
-		MQ_XERROR("Failed to open shaderfile");
+		fail<Er>([] { return "Failed to open shaderfile"; });
 	std::vector<std::uint32_t> spirv(stream.tellg() / sizeof(std::uint32_t));
 	stream.seekg(0);
 	stream.read(reinterpret_cast<char*>(spirv.data()), spirv.size() * sizeof(std::uint32_t));
@@ -226,7 +226,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		auto requirements = image.getMemoryRequirements();
 		auto memory_type_index = get_memory_type_index(render.physical_device, requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 		if (!memory_type_index.has_value())
-			MQ_XERROR("No appropriate image memory found");
+			fail<Er>([] { return "No appropriate image memory found"; });
 
 		// Make the memory exportable, as DRM will import it
 		vk::ExportMemoryAllocateInfo export_info = {
@@ -321,16 +321,23 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		auto properties = properties_chain.get<vk::PhysicalDeviceProperties2>();
 		// https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceDrmPropertiesEXT.html
 		auto drm_properties = properties_chain.get<vk::PhysicalDeviceDrmPropertiesEXT>();
+		log<Db>([&] { return std::format("Enumerating Card: {}", properties.properties.deviceName.data()); });
 
-		if (properties.properties.apiVersion < vk_version)
+		if (properties.properties.apiVersion < vk_version) {
+			log<Db>([] { return "Skip: Vk ver failed"; });
 			continue;
+		}
 
 		// We chose the primary node previously, ensure we have the same physical device
-		if (!drm_properties.hasPrimary)
+		if (!drm_properties.hasPrimary) {
+			log<Db>([] { return "Skip: Is not primary node"; });
 			continue;
+		}
 		auto rdev = makedev(drm_properties.primaryMajor, drm_properties.primaryMinor);
-		if (rdev != device_rdev)
+		if (rdev != device_rdev) {
+			log<Db>([] { return "Skip: Rdev did not match"; });
 			continue;
+		}
 
 		// Vulkan has the concept of `Queue Families`. Queue families is a group of queues that all have the same capabilites.
 		// Queue families will advertise capbilities such as `graphics`, `compute`, `transfer, `video decode` etc, implying their supported operations.
@@ -345,8 +352,10 @@ Render Mayday::get_shit(dev_t device_rdev) {
 				break;
 			}
 		}
-		if (acceptable_queue_family_index == std::numeric_limits<std::uint32_t>::max())
+		if (acceptable_queue_family_index == std::numeric_limits<std::uint32_t>::max()) {
+			log<Db>([] { return "Skip: No acceptable queue family"; });
 			continue;
+		}
 
 		// Get the supported extensions. Extensions define new additions to the API surface
 		auto available_extensions = physical.enumerateDeviceExtensionProperties();
@@ -362,8 +371,10 @@ Render Mayday::get_shit(dev_t device_rdev) {
 				break;
 		}
 		// The required extensions wasn't entirely drained, so not every ext is supported
-		if (!required_extensions_check.empty())
+		if (!required_extensions_check.empty()) {
+			log<Db>([&] { return std::format("Skip: Did not support extensions: {}", required_extensions_check); });
 			continue;
+		}
 
 		// Get the supported features. Supported allows us to get the requested features values, as it fills it out
 		// Features define the functionality of the existing API
@@ -401,16 +412,18 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			supported_heap.descriptorHeap == false ||
 			// Dependency of descriptor heaps (because the heap is not one fixed type, or doesn't need to be rather)
 			supported_untyped.shaderUntypedPointers == false) {
+			log<Db>([] { return "Skip: Did not support features"; });
 			continue;
 		}
 
 		physical_device = std::move(physical);
 		queue_family_index = acceptable_queue_family_index;
+		log<Db>([] { return "Passed"; });
 		break;
 	}
 
 	if (*physical_device == nullptr)
-		MQ_XERROR("No suitable physical GPU device was found");
+		fail<Er>([] { return "No suitable physical GPU device was found"; });
 
 	// Get the actual queue
 	// queue_prorities is a hint to the GPU of which queues should be favoured, if it becomes overloaded
@@ -652,7 +665,7 @@ void Mayday::regenerate_heaps() {
 			// Host coherent means that it automatically flushes after we write on the CPU side
 			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal);
 		if (!memory_type_index.has_value())
-			MQ_XERROR("No appropriate image memory found");
+			fail<Er>([] { return "No appropriate image memory found"; });
 
 		vk::StructureChain<vk::MemoryAllocateInfo, vk::MemoryAllocateFlagsInfo> chain = {
 			{
@@ -693,9 +706,9 @@ void Mayday::regenerate_heaps() {
 
 	// Shader only supports u32's for the offsets
 	if (resource_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
-		MQ_XERROR("Unable to cast resource heap start offset to a u32, would overflow");
+		fail<Er>([] { return "Unable to cast resource heap start offset to a u32, would overflow"; });
 	if (sampler_heap_start_offset > std::numeric_limits<std::uint32_t>::max())
-		MQ_XERROR("Unable to cast sampler heap start offset to a u32, would overflow");
+		fail<Er>([] { return "Unable to cast sampler heap start offset to a u32, would overflow"; });
 
 	auto heap_properties = HeapProperties {
 		.driver_reserved_resource_heap_size = raw_heap_properties.minResourceHeapReservedRange,
@@ -746,8 +759,8 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 
 	// Write the images views
 	std::uint32_t i = 0;
-    // We could cache this, and should somewhere TODO
-    auto resource_start_offset = render.resource_heap.cpu_address + render.heap_properties.resource_heap_start_offset + (monitor_index * HeapProperties::resources_per_monitor) * render.heap_properties.resource_stride;
+	// We could cache this, and should somewhere TODO
+	auto resource_start_offset = render.resource_heap.cpu_address + render.heap_properties.resource_heap_start_offset + (monitor_index * HeapProperties::resources_per_monitor) * render.heap_properties.resource_stride;
 	for (auto& client : server.clients) {
 		for (auto& object : client.get()->objects) {
 			auto& interface = std::get<1>(object.second);
@@ -825,6 +838,7 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 
 	// Command buffers are the 'unit of work' on the gpu. When we are recording stuff into it, we're mainly setting metadata,
 	// only command buffers start in queue order between themselves, not stuff that was recorded within them.
+	// This implicitly also resets the command buffer https://docs.vulkan.org/refpages/latest/refpages/source/VkCommandPoolCreateFlagBits.html
 	command_buffer.begin(vk::CommandBufferBeginInfo {
 		.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
 	});

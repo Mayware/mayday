@@ -1,11 +1,11 @@
 module;
 #include <libudev.h>
 #include <mayday/libseat.h>
-#include <mayquill/logger.h>
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 export module mayday;
+import logger;
 export import mayday.reality;
 import mayquill;
 import vulkan;
@@ -13,13 +13,13 @@ import vulkan;
 void enable_seat(libseat* libseat, void* user_data) {
 	auto seat = static_cast<Seat*>(user_data);
 	seat->active = true;
-	MQ_INFO("Seat was enabled");
+	log<If>([] { return "Seat was enabled"; });
 }
 
 void disable_seat(libseat* libseat, void* user_data) {
 	auto seat = static_cast<Seat*>(user_data);
 	seat->active = false;
-	MQ_INFO("Seat was disabled");
+	log<If>([] { return "Seat was disabled"; });
 	libseat_disable_seat(libseat);
 	// No need to re-open devices, the fd is not invalidated, it isn't useable until re-enabling
 }
@@ -31,8 +31,8 @@ export class Mayday : public Reality {
 	// Gets the vulkan "objects"
 	static Render get_shit(dev_t device_rdev);
 	VkMonitor get_vk_monitor(std::uint32_t width, std::uint32_t height, std::uint32_t frame_count);
-    void render_monitor(std::uint32_t monitor_index, std::uint32_t frame_index);
-    void regenerate_heaps(); // Regenerate the resource + sampler heaps (and heap_properties)
+	void render_monitor(std::uint32_t monitor_index, std::uint32_t frame_index);
+	void regenerate_heaps(); // Regenerate the resource + sampler heaps (and heap_properties)
 
   public:
 	/* Mainly drm shit */
@@ -42,11 +42,11 @@ export class Mayday : public Reality {
 	mayquill::Server server;
 
 	Mayday(std::string device_path, dev_t device_rdev) : Reality {.render = get_shit(device_rdev)} {
-        //* MISC *//
-        auto misc = Misc {
-            .device_path = device_path,
-            .device_rdev = device_rdev,
-        };
+		//* MISC *//
+		auto misc = Misc {
+			.device_path = device_path,
+			.device_rdev = device_rdev,
+		};
 
 		//* LIBSEAT *//
 		libseat_seat_listener listener = {
@@ -55,29 +55,29 @@ export class Mayday : public Reality {
 		};
 		seat.seat = libseat_open_seat(&listener, &seat);
 		if (!seat.seat)
-			MQ_XERRNO("Failed to open seat");
+			fail<Er, No>([] { return "Failed to open seat"; });
 
 		seat.seat_fd = libseat_get_fd(seat.seat);
 		if (seat.seat_fd < 0) {
-			MQ_XERRNO("Failed to get seat fd");
+			fail<Er, No>([] { return "Failed to get seat fd"; });
 		}
 
 		// Yield until we're given control of the seat
 		while (!seat.active) {
 			if (libseat_dispatch(seat.seat, -1) == -1)
-				MQ_XERRNO("Failed to dispatch libseat");
+				fail<Er, No>([] { return "Failed to dispatch libseat"; });
 		}
 
 		// Device id is libseats internal handle to the device, it takes it again when closing the device
 		seat.device_id = libseat_open_device(seat.seat, misc.device_path.c_str(), &seat.device_fd);
 		if (seat.device_id == -1)
-			MQ_XERRNO("Failed to open device");
+			fail<Er, No>([] { return "Failed to open device"; });
 
 		//* UDEV *//
 		// Udev 'context', essentially, the handle to udev
 		this->udevd.context = udev_new();
 		if (!udevd.context)
-			MQ_XERRNO("Failed to create udev context");
+			fail<Er, No>([] { return "Failed to create udev context"; });
 
 		// Netlink is how userspace programs communicate with the kernel (via socket shit)
 		// Netlink is has a 'multicast' system meaning you subscribe, then all subscribers get notifs
@@ -85,27 +85,27 @@ export class Mayday : public Reality {
 		// https://www.kernel.org/doc/html/next/userspace-api/netlink/intro.html
 		udevd.watch = udev_monitor_new_from_netlink(udevd.context, "udev");
 		if (!udevd.watch)
-			MQ_XERROR("Failed to create udev monitor");
+			fail<Er>([] { return "Failed to create udev monitor"; });
 
 		// A good article, albeit, looks ai genned
 		// https://linuxvox.com/blog/uevent-sent-from-kernel-to-user-space-udev/#what-are-uevents
 		// Matches changes to /sys/class/drm (that is where the drm subsystem reflects its state)
 		if (udev_monitor_filter_add_match_subsystem_devtype(udevd.watch, "drm", nullptr) < 0)
-			MQ_XERROR("Failed to add watch");
+			fail<Er>([] { return "Failed to add watch"; });
 		if (udev_monitor_enable_receiving(udevd.watch) < 0)
-			MQ_XERROR("Failed to enable receiving the watch");
+			fail<Er>([] { return "Failed to enable receiving the watch"; });
 		udevd.watch_fd = udev_monitor_get_fd(udevd.watch);
 		if (udevd.watch_fd < 0)
-			MQ_XERROR("Failed to get watch fd");
+			fail<Er>([] { return "Failed to get watch fd"; });
 
 		//* DRM *//
 		if (drmSetClientCap(seat.device_fd, DRM_CLIENT_CAP_ATOMIC, 1))
-			MQ_XERRNO("Failed to enable atomic commits");
+			fail<Er, No>([] { return "Failed to enable atomic commits"; });
 
 		// Gives us access to the real planes, i.e. the primary plane.
 		// This isn't enabled by default for legacy programs not using the API
 		if (drmSetClientCap(seat.device_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1))
-			MQ_XERRNO("Failed to enable universal planes");
+			fail<Er, No>([] { return "Failed to enable universal planes"; });
 
 		regenerate_monitors();
 
