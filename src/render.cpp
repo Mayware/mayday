@@ -183,7 +183,9 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 			// We can use this as a colour attachment (for fragment shaders to render into)
 			.usage = vk::ImageUsageFlagBits::eColorAttachment,
 			// Only one queue family will operate on this image, because we only have one queue lmao. We could set to concurrent if more than one queue
-			// could use this image
+			// could use this image. Note that when we "release" the image to DRM (i.e. to give DRM read access), we must still transition the queue to foreign
+            // queue, even though it doesn't modify the image. Exclusive (https://docs.vulkan.org/refpages/latest/refpages/source/VkSharingMode.html) mandates
+            // this on any access. I can guess that it will actually write some data on release and subsequent re-acquire, but that is just a guess.
 			.sharingMode = vk::SharingMode::eExclusive,
 			// Specifies what content is in this image memory, when we are going to transition
 			.initialLayout = vk::ImageLayout::eUndefined,
@@ -844,10 +846,22 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 	});
 
 	// https://youtu.be/GiKbGWI4M-Y?t=2046 https://www.khronos.org/blog/understanding-vulkan-synchronization. Essentially, memory barriers ensrue caches are flushed when relevant
-	// the src stage mask says that for every buffer / command before this barrier, yield until it passes that stage. dst access mask means that for every buffer / command after this barrier
+	// the src stage mask says that for every buffer / command (commands are like draw calls, copies etc, within one buffer) before this barrier, yield until it passes that stage.
+    // dst access mask means that for every buffer / command after this barrier
 	// make it yield just before it starts the dst stage, then when the src stages are complete, let it continue.
-	// Eg. src mask: fragment shader, dst mask: colour attachment; do not allow commands after this barrier to pass colour attachment stage, until commands before it have passed their fragment shader stages
-	// It applies to all in flight buffers, before and after
+	// Eg. src mask: fragment shader, dst mask: colour attachment; do not allow any command recorded after this barrier to pass colour attachment stage, until ALL the
+    // commands before it have passed their fragment shader stages
+    // The image layout transition itself, occurs *between* the src and dst stages.
+    // So, for the above example: do not allow any command recorded after to pass the colour attachment stage, until ALL the commands before have passed their fragment
+    // shader stages, and do not begin transitioning the layout until the commands before have passed their fragment shader staged, and then, ensure the transition is
+    // complete by the time the commands after have reached the colour attachment stage.
+    // In essence the transition looks like: earlier commands reach fragment stage --> Begin Transition (................................. Stalling....)
+    //                                                                                          --> Later commands reach colour attachment              --> Continue
+    // So the transition can stall the pipeline, given the transition takes longer than the (Later commands colour attachment time - earlier commands fragment time)
+    // If it can finish in that gap, it can avoid the stall
+    // Notice how we have none for the src mask, following the above logic it means "later commands must wait for nothing before passing colour attachment" and
+    // "the image transition must occur between nothing for earlier commands and colour attachment stage for later commands". Essentially meaning, there is no command
+    // dependency order and this barrier solely means the transition can start whenever and must finish before later commands reach their colour attachment stage.
 	vk::ImageMemoryBarrier2 image_barrier = {
 		.srcStageMask = vk::PipelineStageFlagBits2::eNone,
 		.srcAccessMask = vk::AccessFlagBits2::eNone,
@@ -855,8 +869,7 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 		.dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
 		.oldLayout = vk::ImageLayout::eUndefined,
 		.newLayout = vk::ImageLayout::eAttachmentOptimal,
-		// We aren't changing what queue family we're using
-		.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+		.srcQueueFamilyIndex = vk::QueueFamilyForeignEXT,
 		.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
 		.image = *frame.image,
 		.subresourceRange = {
@@ -948,6 +961,7 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 		});
 
 	// Unlike the name suggests, it just specifies the colour attachment - it doesn't actually 'render' into it here
+    // It's just telling the later draw calls what to render into
 	command_buffer.beginRendering(rendering_info);
 	// This is a graphics pipeline, we could have stuff like compute pipelines instead
 	command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, render.graphics_pipeline);
@@ -989,8 +1003,33 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 	});
 
 	command_buffer.draw(6, i, 0, 0);
-
 	command_buffer.endRendering();
+
+	vk::ImageMemoryBarrier2 transition_to_general = {
+        // Transition it, after rendering is done
+		.srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		.srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+		.dstStageMask = vk::PipelineStageFlagBits2::eNone,
+		.dstAccessMask = vk::AccessFlagBits2::eNone,
+		.oldLayout = vk::ImageLayout::eAttachmentOptimal,
+		.newLayout = vk::ImageLayout::eGeneral,
+        // DRM will access it next, hence we release it
+		.srcQueueFamilyIndex = render.queue_family_index,
+		.dstQueueFamilyIndex = vk::QueueFamilyForeignEXT,
+		.image = *frame.image,
+		.subresourceRange = {
+			.aspectMask = vk::ImageAspectFlagBits::eColor,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+		},
+	};
+	command_buffer.pipelineBarrier2(vk::DependencyInfo {
+		.imageMemoryBarrierCount = 1,
+		.pImageMemoryBarriers = &transition_to_general,
+	});
+
 	command_buffer.end();
 
 	vk::CommandBufferSubmitInfo submit_info = {

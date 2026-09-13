@@ -33,8 +33,7 @@ void WpLinuxDrmSyncobjManagerV1::handle(Request request) {
 					   auto& reality = gimme_reality(client);
 					   std::uint32_t handle;
 					   if (drmSyncobjFDToHandle(reality.seat.device_fd, request.fd, &handle))
-						   // Shouldn't need to quality combo_errno, but GCC fails like it always does
-						   client.error(keyd.id, WpLinuxDrmSyncobjManagerV1::ErrorEnum::InvalidTimeline, maylog::combo_errno("Bossman, we failed to import the timeline"));
+						   client.error(keyd.id, WpLinuxDrmSyncobjManagerV1::ErrorEnum::InvalidTimeline,maylog::combo_errno("Bossman, we failed to import the timeline"));
 					   client.add_object<WpLinuxDrmSyncobjTimelineV1>(request.id, std::make_unique<SyncobjTimelineData>(reality.seat.device_fd, handle));
 				   },
 				   [this](Destroy& request) {},
