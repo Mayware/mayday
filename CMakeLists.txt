@@ -45,7 +45,9 @@ foreach(SHADER_SOURCE IN LISTS SHADER_FILES)
     set(SHADER_OUT "${CMAKE_BINARY_DIR}/../shaders/${SHADER_NAME}.spv")
     add_custom_command(
         OUTPUT ${SHADER_OUT}
-        COMMAND Vulkan::glslc "${SHADER_SOURCE}" -o "${SHADER_OUT}"
+        #> https://man.archlinux.org/man/extra/shaderc/glslc.1.en
+        #> We want vulkan 1.4 semantics, according to the manpage, bumps the SPIR-V version it generates
+        COMMAND Vulkan::glslc --target-env=vulkan1.4 "${SHADER_SOURCE}" -o "${SHADER_OUT}"
         DEPENDS ${SHADER_SOURCE}
         COMMENT "Compiling ${SHADER_NAME}"
     )

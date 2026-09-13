@@ -115,6 +115,7 @@ export struct Render {
 
 	vk::raii::Context context;
 	vk::raii::Instance instance;
+    std::optional<vk::raii::DebugUtilsMessengerEXT> debug_messenger;
 	vk::raii::PhysicalDevice physical_device;
 	vk::raii::Device device;
 	std::uint32_t queue_family_index;

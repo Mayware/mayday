@@ -25,14 +25,26 @@ import mayday.util;
 
 constexpr auto vk_version = vk::ApiVersion14;
 
+// Layers sit inbetween our calls to vulkan, and aren't actually part of vulkan itself (hence none of the enums),
+// they're just what our loader will let MiM us
+constexpr std::array required_layers = {
+	"VK_LAYER_KHRONOS_validation" // Validation layers, that allow us to get additional debug messages
+};
+
 // To get the equivalent enum, take the string name, PascalCase it, and append ExtensionName
 // The enum points to a macro, which just defines the string
-constexpr std::array required_extensions = {
+// Extensions expand the API surface, whereas features, toggle existing functionality within the API
+// (perhaps functionality that was just exposed by an extension)
+constexpr std::array required_device_extensions = {
 	vk::EXTImageDrmFormatModifierExtensionName, // Allows us to use DRM format modifiers with images
 	vk::KHRExternalMemoryFdExtensionName,		// Ability to export device memory as POSIX FD's (generic)
 	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
 	vk::EXTDescriptorHeapExtensionName,			// Allows us to use descriptor heaps
 	vk::KHRShaderUntypedPointersExtensionName,	// Dependency of descriptor heaps ext
+};
+
+constexpr std::array required_instance_extensions = {
+	vk::EXTDebugUtilsExtensionName, // Lets us control the validation layer
 };
 
 // Our internal image format is the 0 index, which is equivalent to vk::Format::eB8G8R8A8Unorm
@@ -184,8 +196,8 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 			.usage = vk::ImageUsageFlagBits::eColorAttachment,
 			// Only one queue family will operate on this image, because we only have one queue lmao. We could set to concurrent if more than one queue
 			// could use this image. Note that when we "release" the image to DRM (i.e. to give DRM read access), we must still transition the queue to foreign
-            // queue, even though it doesn't modify the image. Exclusive (https://docs.vulkan.org/refpages/latest/refpages/source/VkSharingMode.html) mandates
-            // this on any access. I can guess that it will actually write some data on release and subsequent re-acquire, but that is just a guess.
+			// queue, even though it doesn't modify the image. Exclusive (https://docs.vulkan.org/refpages/latest/refpages/source/VkSharingMode.html) mandates
+			// this on any access. I can guess that it will actually write some data on release and subsequent re-acquire, but that is just a guess.
 			.sharingMode = vk::SharingMode::eExclusive,
 			// Specifies what content is in this image memory, when we are going to transition
 			.initialLayout = vk::ImageLayout::eUndefined,
@@ -295,6 +307,36 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	// https://github.com/KhronosGroup/Vulkan-Hpp/blob/main/docs/Handles.md
 	vk::raii::Context context = {};
 
+	// Ensure the required layers exist
+	std::vector required_layers_check(std::begin(required_layers), std::end(required_layers));
+	for (auto available_layer : context.enumerateInstanceLayerProperties()) {
+		for (auto it = required_layers_check.begin(); it < required_layers_check.end(); ++it) {
+			if (std::string_view(available_layer.layerName) == *it) {
+				required_layers_check.erase(it);
+				break;
+			}
+		}
+		if (required_layers_check.empty())
+			break;
+	}
+	if (!required_layers_check.empty())
+		fail<Er>([&] { return std::format("Did not support layers: {}", required_layers_check); });
+
+	// Ensure the required instance extensions exist
+	std::vector required_instance_check(std::begin(required_instance_extensions), std::end(required_instance_extensions));
+	for (auto available_extension : context.enumerateInstanceExtensionProperties()) {
+		for (auto it = required_instance_check.begin(); it < required_instance_check.end(); ++it) {
+			if (std::string_view(available_extension.extensionName) == *it) {
+				required_instance_check.erase(it);
+				break;
+			}
+		}
+		if (required_instance_check.empty())
+			break;
+	}
+	if (!required_instance_check.empty())
+		fail<Er>([&] { return std::format("Did not support layers: {}", required_instance_check); });
+
 	static constexpr vk::ApplicationInfo app_info = {
 		.pApplicationName = "Mayday",
 		.applicationVersion = vk::makeApiVersion(0, 1, 0, 0),
@@ -303,15 +345,62 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		.apiVersion = vk_version,
 	};
 
-	static constexpr vk::InstanceCreateInfo create_info = {
+	static constexpr vk::InstanceCreateInfo instance_create_info = {
 		.pApplicationInfo = &app_info,
-		.enabledLayerCount = 0,
-		.ppEnabledLayerNames = nullptr,
-		.enabledExtensionCount = 0,
-		.ppEnabledExtensionNames = nullptr,
+		.enabledLayerCount = required_layers.size(),
+		.ppEnabledLayerNames = required_layers.data(),
+		.enabledExtensionCount = required_instance_extensions.size(),
+		.ppEnabledExtensionNames = required_instance_extensions.data(),
 	};
 
-	auto instance = context.createInstance(create_info);
+	auto instance = context.createInstance(instance_create_info);
+
+	// https://docs.vulkan.org/refpages/latest/refpages/source/PFN_vkDebugUtilsMessengerCallbackEXT.html
+	// Non-capturing lambdas automatically become function pointers: https://stackoverflow.com/a/18889029
+	auto debug_callback = [](vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+							  vk::DebugUtilsMessageTypeFlagsEXT types,
+							  const vk::DebugUtilsMessengerCallbackDataEXT* callback_data,
+							  void* user_data) -> vk::Bool32 {
+		std::string message = std::string(callback_data->pMessage);
+		switch (severity) {
+		case vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose: {
+			log<Db>([&message] { return message; });
+			break;
+		}
+		case vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo: {
+			log<If>([&message] { return message; });
+			break;
+		}
+		case vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning: {
+			log<Wn>([&message] { return message; });
+			break;
+		}
+		case vk::DebugUtilsMessageSeverityFlagBitsEXT::eError: {
+			log<Er>([&message] { return message; });
+			break;
+		}
+		}
+		return vk::False;
+	};
+
+	// Param: https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessengerCreateInfoEXT.html
+    // Return: https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessengerEXT.html
+    // The return is just an opaque handle that we need to keep alive, i assume it contains the data of the
+    // callback address etc we just gave it
+	auto debug_messenger = instance.createDebugUtilsMessengerEXT(vk::DebugUtilsMessengerCreateInfoEXT {
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessageSeverityFlagBitsEXT.html
+		.messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
+						   vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
+						   vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+						   vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessageTypeFlagBitsEXT.html
+		.messageType =
+			vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+			vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+			vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+			vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding,
+		.pfnUserCallback = debug_callback,
+	});
 
 	vk::raii::PhysicalDevice physical_device = nullptr;
 	std::uint32_t queue_family_index;
@@ -331,6 +420,7 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		}
 
 		// We chose the primary node previously, ensure we have the same physical device
+		// (a render node would not have modesetting capabilities)
 		if (!drm_properties.hasPrimary) {
 			log<Db>([] { return "Skip: Is not primary node"; });
 			continue;
@@ -360,21 +450,20 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		}
 
 		// Get the supported extensions. Extensions define new additions to the API surface
-		auto available_extensions = physical.enumerateDeviceExtensionProperties();
-		std::vector<const char*> required_extensions_check(std::begin(required_extensions), std::end(required_extensions));
-		for (auto available_extension : available_extensions) {
-			for (auto it = required_extensions_check.begin(); it < required_extensions_check.end(); ++it) {
+		std::vector<const char*> required_device_check(std::begin(required_device_extensions), std::end(required_device_extensions));
+		for (auto available_extension : physical.enumerateDeviceExtensionProperties()) {
+			for (auto it = required_device_check.begin(); it < required_device_check.end(); ++it) {
 				if (std::string_view(available_extension.extensionName) == *it) {
-					required_extensions_check.erase(it);
+					required_device_check.erase(it);
 					break;
 				}
 			}
-			if (required_extensions_check.empty())
+			if (required_device_check.empty())
 				break;
 		}
 		// The required extensions wasn't entirely drained, so not every ext is supported
-		if (!required_extensions_check.empty()) {
-			log<Db>([&] { return std::format("Skip: Did not support extensions: {}", required_extensions_check); });
+		if (!required_device_check.empty()) {
+			log<Db>([&] { return std::format("Skip: Did not support extensions: {}", required_device_check); });
 			continue;
 		}
 
@@ -402,6 +491,8 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			// You can submit multiple things with the same semaphore, and since queues are linear, you know if the integer
 			// is the highest one you submitted, then the rest are also done. It's an alternative to fences
 			supported_12.timelineSemaphore == false ||
+			// Ability to get the GPU address of a buffer on the GPU
+			supported_12.bufferDeviceAddress == false ||
 			// QOL features, the main one we use is that we can pass the shader module info directly to the pipeline now,
 			// and the pipeline will create the module. Without this, we would need to do
 			// auto vert_shader_module = device.createShaderModule(vert_shader_info); and then pass that to the pipeline.
@@ -450,11 +541,12 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			{
 				.queueCreateInfoCount = 1,
 				.pQueueCreateInfos = &queue_info,
-				.enabledExtensionCount = required_extensions.size(),
-				.ppEnabledExtensionNames = required_extensions.data(),
+				.enabledExtensionCount = required_device_extensions.size(),
+				.ppEnabledExtensionNames = required_device_extensions.data(),
 			},
 			{
 				.timelineSemaphore = true,
+				.bufferDeviceAddress = true,
 			},
 			{
 				.synchronization2 = true,
@@ -575,9 +667,6 @@ Render Mayday::get_shit(dev_t device_rdev) {
 		.pAttachments = &colour_blend_attachment,
 	};
 
-	// This would usually specify what push constants / descriptor sets ranges, but we have none
-	auto pipeline_layout = device.createPipelineLayout(vk::PipelineLayoutCreateInfo {});
-
 	// Specify the formats of the colour attachments we will add
 	vk::PipelineRenderingCreateInfo pipeline_rendering_info = {
 		.colorAttachmentCount = 1,
@@ -634,12 +723,12 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			.pMultisampleState = &multisample_info,
 			.pColorBlendState = &colour_blend_info,
 			.pDynamicState = &dynamic_state_info,
-			.layout = pipeline_layout,
 		});
 
 	return {
 		.context = std::move(context),
 		.instance = std::move(instance),
+        .debug_messenger = std::move(debug_messenger),
 		.physical_device = std::move(physical_device),
 		.device = std::move(device),
 		.queue_family_index = queue_family_index,
@@ -689,6 +778,7 @@ void Mayday::regenerate_heaps() {
 		return HeapBuffer {
 			.memory = std::move(memory),
 			.gpu_address = std::move(buffer_address),
+			.size = size,
 			.cpu_address = std::move(cpu_address),
 			.buffer = std::move(buffer),
 		};
@@ -728,11 +818,9 @@ void Mayday::regenerate_heaps() {
 	// that number of resource descriptors, per monitor
 	vk::DeviceSize resource_heap_size = heap_properties.resource_heap_start_offset + heap_properties.resource_stride * (HeapProperties::resources_per_monitor * monitors.size());
 	auto resource_heap = create_heap_buffer(resource_heap_size);
-	resource_heap.size = resource_heap_size;
 	// Only 1 sampler, currently
 	vk::DeviceSize sampler_heap_size = heap_properties.sampler_heap_start_offset + heap_properties.sampler_descriptor_size * 1;
 	auto sampler_heap = create_heap_buffer(sampler_heap_size);
-	sampler_heap.size = sampler_heap_size;
 
 	// Write the samplers into the heap (samplers do stuff like choosing filtering, anisotropy, scaling etc)
 	// Most formats can use this default sampler, but when we do ycbrsomething (the one wth brightness plane, two colour planes),
@@ -847,21 +935,21 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 
 	// https://youtu.be/GiKbGWI4M-Y?t=2046 https://www.khronos.org/blog/understanding-vulkan-synchronization. Essentially, memory barriers ensrue caches are flushed when relevant
 	// the src stage mask says that for every buffer / command (commands are like draw calls, copies etc, within one buffer) before this barrier, yield until it passes that stage.
-    // dst access mask means that for every buffer / command after this barrier
+	// dst access mask means that for every buffer / command after this barrier
 	// make it yield just before it starts the dst stage, then when the src stages are complete, let it continue.
 	// Eg. src mask: fragment shader, dst mask: colour attachment; do not allow any command recorded after this barrier to pass colour attachment stage, until ALL the
-    // commands before it have passed their fragment shader stages
-    // The image layout transition itself, occurs *between* the src and dst stages.
-    // So, for the above example: do not allow any command recorded after to pass the colour attachment stage, until ALL the commands before have passed their fragment
-    // shader stages, and do not begin transitioning the layout until the commands before have passed their fragment shader staged, and then, ensure the transition is
-    // complete by the time the commands after have reached the colour attachment stage.
-    // In essence the transition looks like: earlier commands reach fragment stage --> Begin Transition (................................. Stalling....)
-    //                                                                                          --> Later commands reach colour attachment              --> Continue
-    // So the transition can stall the pipeline, given the transition takes longer than the (Later commands colour attachment time - earlier commands fragment time)
-    // If it can finish in that gap, it can avoid the stall
-    // Notice how we have none for the src mask, following the above logic it means "later commands must wait for nothing before passing colour attachment" and
-    // "the image transition must occur between nothing for earlier commands and colour attachment stage for later commands". Essentially meaning, there is no command
-    // dependency order and this barrier solely means the transition can start whenever and must finish before later commands reach their colour attachment stage.
+	// commands before it have passed their fragment shader stages
+	// The image layout transition itself, occurs *between* the src and dst stages.
+	// So, for the above example: do not allow any command recorded after to pass the colour attachment stage, until ALL the commands before have passed their fragment
+	// shader stages, and do not begin transitioning the layout until the commands before have passed their fragment shader staged, and then, ensure the transition is
+	// complete by the time the commands after have reached the colour attachment stage.
+	// In essence the transition looks like: earlier commands reach fragment stage --> Begin Transition (................................. Stalling....)
+	//                                                                                          --> Later commands reach colour attachment              --> Continue
+	// So the transition can stall the pipeline, given the transition takes longer than the (Later commands colour attachment time - earlier commands fragment time)
+	// If it can finish in that gap, it can avoid the stall
+	// Notice how we have none for the src mask, following the above logic it means "later commands must wait for nothing before passing colour attachment" and
+	// "the image transition must occur between nothing for earlier commands and colour attachment stage for later commands". Essentially meaning, there is no command
+	// dependency order and this barrier solely means the transition can start whenever and must finish before later commands reach their colour attachment stage.
 	vk::ImageMemoryBarrier2 image_barrier = {
 		.srcStageMask = vk::PipelineStageFlagBits2::eNone,
 		.srcAccessMask = vk::AccessFlagBits2::eNone,
@@ -961,7 +1049,7 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 		});
 
 	// Unlike the name suggests, it just specifies the colour attachment - it doesn't actually 'render' into it here
-    // It's just telling the later draw calls what to render into
+	// It's just telling the later draw calls what to render into
 	command_buffer.beginRendering(rendering_info);
 	// This is a graphics pipeline, we could have stuff like compute pipelines instead
 	command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, render.graphics_pipeline);
@@ -1002,18 +1090,19 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 		},
 	});
 
+	log<Db>([i] { return std::format("Valid surfaces with buffers: {}", i); });
 	command_buffer.draw(6, i, 0, 0);
 	command_buffer.endRendering();
 
 	vk::ImageMemoryBarrier2 transition_to_general = {
-        // Transition it, after rendering is done
+		// Transition it, after rendering is done
 		.srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 		.srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
 		.dstStageMask = vk::PipelineStageFlagBits2::eNone,
 		.dstAccessMask = vk::AccessFlagBits2::eNone,
 		.oldLayout = vk::ImageLayout::eAttachmentOptimal,
 		.newLayout = vk::ImageLayout::eGeneral,
-        // DRM will access it next, hence we release it
+		// DRM will access it next, hence we release it
 		.srcQueueFamilyIndex = render.queue_family_index,
 		.dstQueueFamilyIndex = vk::QueueFamilyForeignEXT,
 		.image = *frame.image,
