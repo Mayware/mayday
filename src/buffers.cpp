@@ -84,7 +84,7 @@ void WlShmPool::handle(Request request) {
 						.arrayLayers = 1,
 						.samples = vk::SampleCountFlagBits::e1,
 						.tiling = vk::ImageTiling::eOptimal,
-						.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eHostTransfer,
+						.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eHostTransfer | vk::ImageUsageFlagBits::eTransferDst,
 						.sharingMode = vk::SharingMode::eExclusive,
 						.initialLayout = vk::ImageLayout::eUndefined,
 					});

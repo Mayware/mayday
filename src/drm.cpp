@@ -425,13 +425,13 @@ void Mayday::handle_vsync(int fd, unsigned int sequence, unsigned int tv_sec, un
 	render_monitor(monitor_index, next_frame);
 
 	// TODO export syncfile, instead of stalling the thread
-	// auto _ = render.device.waitSemaphores(
-	// 	vk::SemaphoreWaitInfo {
-	// 		.semaphoreCount = 1,
-	// 		.pSemaphores = &*render.semaphore,
-	// 		.pValues = &monitor.frames[next_frame].semaphore_value,
-	// 	},
-	// 	std::numeric_limits<std::uint64_t>::max());
+	auto _ = render.device.waitSemaphores(
+		vk::SemaphoreWaitInfo {
+			.semaphoreCount = 1,
+			.pSemaphores = &*render.semaphore,
+			.pValues = &monitor.frames[next_frame].semaphore_value,
+		},
+		std::numeric_limits<std::uint64_t>::max());
 
 	drmModeAtomicReq* atomic_request = drmModeAtomicAlloc();
 	if (!atomic_request)

@@ -37,5 +37,7 @@ void main() {
     uv = uvs[vertexIndex];
     vec2 position = positions[vertexIndex];
     // W component is explained in the render.cpp matching code
-    gl_Position = vec4(position.x * RESOURCE.width + RESOURCE.x, position.y * RESOURCE.height + RESOURCE.y, 0.0, 1.0);
+    // gl_Position = vec4(position.x * RESOURCE.width + RESOURCE.x, position.y * RESOURCE.height + RESOURCE.y, 0.0, 1.0);
+    gl_Position = vec4(position.x * VIEW_N(2) + VIEW_N(0) , position.y * VIEW_N(3) + VIEW_N(1), 0.0, 1.0);
+    // gl_Position = vec4(position.x, position.y, 0.0, 1.0);
 }

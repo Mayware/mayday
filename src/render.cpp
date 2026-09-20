@@ -41,6 +41,7 @@ constexpr std::array required_device_extensions = {
 	vk::EXTExternalMemoryDmaBufExtensionName,	// As a DMABUF Fd, requires the one above
 	vk::EXTDescriptorHeapExtensionName,			// Allows us to use descriptor heaps
 	vk::KHRShaderUntypedPointersExtensionName,	// Dependency of descriptor heaps ext
+	vk::EXTQueueFamilyForeignExtensionName,		// Ability to use foreign queues as a src / transfer in barriers
 };
 
 constexpr std::array required_instance_extensions = {
@@ -49,79 +50,83 @@ constexpr std::array required_instance_extensions = {
 
 // Our internal image format is the 0 index, which is equivalent to vk::Format::eB8G8R8A8Unorm
 // You'll see we use ultra_formats[0].vk_format / ultra_formats[0].drm_format just hardcoded
+// Temporarily disable formats whose mappings use non-identity swizzles: color attachments require identity.
 constexpr std::array supported_drm_formats = {
-	DRM_FORMAT_XRGB8888,
+	// DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_ARGB8888,
-	DRM_FORMAT_XBGR8888,
+	// DRM_FORMAT_XBGR8888,
 	DRM_FORMAT_ABGR8888,
-	DRM_FORMAT_RGBX8888,
-	DRM_FORMAT_RGBA8888,
-	DRM_FORMAT_BGRX8888,
-	DRM_FORMAT_BGRA8888,
-	DRM_FORMAT_XRGB2101010,
+	// DRM_FORMAT_RGBX8888,
+	// DRM_FORMAT_RGBA8888,
+	// DRM_FORMAT_BGRX8888,
+	// DRM_FORMAT_BGRA8888,
+	// DRM_FORMAT_XRGB2101010,
 	DRM_FORMAT_ARGB2101010,
-	DRM_FORMAT_XBGR2101010,
+	// DRM_FORMAT_XBGR2101010,
 	DRM_FORMAT_ABGR2101010,
 	DRM_FORMAT_BGR161616,
-	DRM_FORMAT_RGB161616,
-	DRM_FORMAT_XBGR16161616,
+	// DRM_FORMAT_RGB161616,
+	// DRM_FORMAT_XBGR16161616,
 	DRM_FORMAT_ABGR16161616,
-	DRM_FORMAT_XRGB16161616,
-	DRM_FORMAT_ARGB16161616,
-	DRM_FORMAT_XBGR16161616F,
+	// DRM_FORMAT_XRGB16161616,
+	// DRM_FORMAT_ARGB16161616,
+	// DRM_FORMAT_XBGR16161616F,
 	DRM_FORMAT_ABGR16161616F,
-	DRM_FORMAT_XRGB16161616F,
-	DRM_FORMAT_ARGB16161616F,
+	// DRM_FORMAT_XRGB16161616F,
+	// DRM_FORMAT_ARGB16161616F,
 };
 
 // DRM formats are little endian, so RGB would be stored as BGR. Vulkan just reads in normal order, hence it being inversed.
 // Vulkan doesn't say if some bits are unused, nor does it have all the unique RGB, BGR, GBR combos etc, so the swizzling is to get that (and to blank out alpha to just padding as required)
 std::pair<vk::Format, vk::ComponentMapping> fourcc_to_vk(std::uint32_t format) {
+	// https://docs.vulkan.org/refpages/latest/refpages/source/VkComponentMapping.html
+	// https://docs.vulkan.org/refpages/latest/refpages/source/VkComponentSwizzle.html
+	// If colorAttachmentCount is not 0 and the imageView member of an element of pColorAttachments is not VK_NULL_HANDLE, that imageView must have been created with the identity swizzle; a quote from the spec, i.e. we can't actually swizzle bro
 	switch (format) {
-	case DRM_FORMAT_XRGB8888:
-		return {vk::Format::eB8G8R8A8Unorm, {.a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_XRGB8888:
+	// return {vk::Format::eB8G8R8A8Unorm, {.a = vk::ComponentSwizzle::eOne}};
 	case DRM_FORMAT_ARGB8888:
 		return {vk::Format::eB8G8R8A8Unorm, {}};
-	case DRM_FORMAT_XBGR8888:
-		return {vk::Format::eR8G8B8A8Unorm, {.a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_XBGR8888:
+	// return {vk::Format::eR8G8B8A8Unorm, {.a = vk::ComponentSwizzle::eOne}};
 	case DRM_FORMAT_ABGR8888:
 		return {vk::Format::eR8G8B8A8Unorm, {}};
-	case DRM_FORMAT_RGBX8888:
-		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eA, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eG, .a = vk::ComponentSwizzle::eOne}};
-	case DRM_FORMAT_RGBA8888:
-		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eA, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eG, .a = vk::ComponentSwizzle::eR}};
-	case DRM_FORMAT_BGRX8888:
-		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eG, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eA, .a = vk::ComponentSwizzle::eOne}};
-	case DRM_FORMAT_BGRA8888:
-		return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eG, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eA, .a = vk::ComponentSwizzle::eR}};
-	case DRM_FORMAT_XRGB2101010:
-		return {vk::Format::eA2R10G10B10UnormPack32, {.a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_RGBX8888:
+	// return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eA, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eG, .a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_RGBA8888:
+	// return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eA, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eG, .a = vk::ComponentSwizzle::eR}};
+	// case DRM_FORMAT_BGRX8888:
+	// return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eG, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eA, .a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_BGRA8888:
+	// return {vk::Format::eR8G8B8A8Unorm, {.r = vk::ComponentSwizzle::eG, .g = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eA, .a = vk::ComponentSwizzle::eR}};
+	// case DRM_FORMAT_XRGB2101010:
+	// return {vk::Format::eA2R10G10B10UnormPack32, {.a = vk::ComponentSwizzle::eOne}};
 	case DRM_FORMAT_ARGB2101010:
 		return {vk::Format::eA2R10G10B10UnormPack32, {}};
-	case DRM_FORMAT_XBGR2101010:
-		return {vk::Format::eA2B10G10R10UnormPack32, {.a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_XBGR2101010:
+	// return {vk::Format::eA2B10G10R10UnormPack32, {.a = vk::ComponentSwizzle::eOne}};
 	case DRM_FORMAT_ABGR2101010:
 		return {vk::Format::eA2B10G10R10UnormPack32, {}};
 	case DRM_FORMAT_BGR161616:
 		return {vk::Format::eR16G16B16Unorm, {}};
-	case DRM_FORMAT_RGB161616:
-		return {vk::Format::eR16G16B16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
-	case DRM_FORMAT_XBGR16161616:
-		return {vk::Format::eR16G16B16A16Unorm, {.a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_RGB161616:
+	// return {vk::Format::eR16G16B16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
+	// case DRM_FORMAT_XBGR16161616:
+	// return {vk::Format::eR16G16B16A16Unorm, {.a = vk::ComponentSwizzle::eOne}};
 	case DRM_FORMAT_ABGR16161616:
 		return {vk::Format::eR16G16B16A16Unorm, {}};
-	case DRM_FORMAT_XRGB16161616:
-		return {vk::Format::eR16G16B16A16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eOne}};
-	case DRM_FORMAT_ARGB16161616:
-		return {vk::Format::eR16G16B16A16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
-	case DRM_FORMAT_XBGR16161616F:
-		return {vk::Format::eR16G16B16A16Sfloat, {.a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_XRGB16161616:
+	// return {vk::Format::eR16G16B16A16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_ARGB16161616:
+	// return {vk::Format::eR16G16B16A16Unorm, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
+	// case DRM_FORMAT_XBGR16161616F:
+	// return {vk::Format::eR16G16B16A16Sfloat, {.a = vk::ComponentSwizzle::eOne}};
 	case DRM_FORMAT_ABGR16161616F:
 		return {vk::Format::eR16G16B16A16Sfloat, {}};
-	case DRM_FORMAT_XRGB16161616F:
-		return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eOne}};
-	case DRM_FORMAT_ARGB16161616F:
-		return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
+	// case DRM_FORMAT_XRGB16161616F:
+	// return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eOne}};
+	// case DRM_FORMAT_ARGB16161616F:
+	// return {vk::Format::eR16G16B16A16Sfloat, {.r = vk::ComponentSwizzle::eB, .g = vk::ComponentSwizzle::eG, .b = vk::ComponentSwizzle::eR, .a = vk::ComponentSwizzle::eA}};
 	default:
 		fail<Er>([] { return "Invalid drm format"; });
 	}
@@ -158,17 +163,25 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 	}
 	// https://docs.vulkan.org/refpages/latest/refpages/source/VkImageDrmFormatModifierListCreateInfoEXT.html (allocation path)
 	// Vulkan picks the plane layouts & modifiers, from the options we provide here (layouts are implicit), ie. we are negotiating and vulkan will tell us after what it picked
+	// The driver knows best. (It will pick its preferred one)
 	vk::ImageDrmFormatModifierListCreateInfoEXT potential_modifiers_info = {
 		.drmFormatModifierCount = static_cast<std::uint32_t>(drm_modifiers_ids.size()),
 		.pDrmFormatModifiers = drm_modifiers_ids.data(),
+	};
+
+    // Tell the image, that it will be a dmabuf. This label constricts available options (such as not allowing tiling to be specified as optimal),
+    // and lets it be used with dmabuf exportable memory
+	vk::ExternalMemoryImageCreateInfo external_info = {
+		.pNext = &potential_modifiers_info,
+		.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
 	};
 
 	std::vector<VkFrame> frames;
 
 	for (int i = 0; i < frame_count; ++i) {
 		vk::ImageCreateInfo image_info = {
-			.pNext = &potential_modifiers_info, // The driver knows best. (It will pick its preferred one)
-			.imageType = vk::ImageType::e2D,	// e just means enum
+			.pNext = &external_info,
+			.imageType = vk::ImageType::e2D, // e just means enum
 			.format = render.ultra_formats[0].vk_format,
 			.extent = {
 				.width = width,
@@ -243,15 +256,22 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 			fail<Er>([] { return "No appropriate image memory found"; });
 
 		// Make the memory exportable, as DRM will import it
-		vk::ExportMemoryAllocateInfo export_info = {
-			.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkMemoryAllocateInfo.html#VUID-VkMemoryAllocateInfo-pNext-00639
+		vk::StructureChain<vk::MemoryAllocateInfo, vk::ExportMemoryAllocateInfo, vk::MemoryDedicatedAllocateInfo> allocation_chain = {
+			{
+				.allocationSize = requirements.size,
+				.memoryTypeIndex = *memory_type_index,
+			},
+			{
+				.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
+			},
+			// Specify what image we are relating to in advance, required by DMABUF. Further reasoning in guides.
+			{
+				.image = image,
+			},
+
 		};
-		vk::MemoryAllocateInfo allocation_info = {
-			.pNext = &export_info,
-			.allocationSize = requirements.size,
-			.memoryTypeIndex = *memory_type_index,
-		};
-		auto image_memory = render.device.allocateMemory(allocation_info);
+		auto image_memory = render.device.allocateMemory(allocation_chain.get<vk::MemoryAllocateInfo>());
 		image.bindMemory(image_memory, 0); // Last param is offset
 		// Get an fd to the memory
 		int dmabuf_fd = render.device.getMemoryFdKHR({
@@ -262,6 +282,7 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		});
 
 		// Essentially a 'span' into our existing image, that lets us re-interpret it, and filter what we want from it
+		// https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewCreateInfo.html
 		vk::ImageViewCreateInfo image_view_info = {
 			.image = image,
 			// You could interpret a 3d image as a 2d image with array layers
@@ -384,9 +405,9 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	};
 
 	// Param: https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessengerCreateInfoEXT.html
-    // Return: https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessengerEXT.html
-    // The return is just an opaque handle that we need to keep alive, i assume it contains the data of the
-    // callback address etc we just gave it
+	// Return: https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessengerEXT.html
+	// The return is just an opaque handle that we need to keep alive, i assume it contains the data of the
+	// callback address etc we just gave it
 	auto debug_messenger = instance.createDebugUtilsMessengerEXT(vk::DebugUtilsMessengerCreateInfoEXT {
 		// https://docs.vulkan.org/refpages/latest/refpages/source/VkDebugUtilsMessageSeverityFlagBitsEXT.html
 		.messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
@@ -493,6 +514,9 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			supported_12.timelineSemaphore == false ||
 			// Ability to get the GPU address of a buffer on the GPU
 			supported_12.bufferDeviceAddress == false ||
+            // Used in the shader for layout(heap_offset = myOffset), the offset is in bytes (and hence, it indexes
+            // into a byte array, and to support one byte values, it needs int8 support
+            supported_12.shaderInt8 == false ||
 			// QOL features, the main one we use is that we can pass the shader module info directly to the pipeline now,
 			// and the pipeline will create the module. Without this, we would need to do
 			// auto vert_shader_module = device.createShaderModule(vert_shader_info); and then pass that to the pipeline.
@@ -545,6 +569,7 @@ Render Mayday::get_shit(dev_t device_rdev) {
 				.ppEnabledExtensionNames = required_device_extensions.data(),
 			},
 			{
+                .shaderInt8 = true,
 				.timelineSemaphore = true,
 				.bufferDeviceAddress = true,
 			},
@@ -728,7 +753,7 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	return {
 		.context = std::move(context),
 		.instance = std::move(instance),
-        .debug_messenger = std::move(debug_messenger),
+		.debug_messenger = std::move(debug_messenger),
 		.physical_device = std::move(physical_device),
 		.device = std::move(device),
 		.queue_family_index = queue_family_index,
@@ -958,7 +983,7 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 		.oldLayout = vk::ImageLayout::eUndefined,
 		.newLayout = vk::ImageLayout::eAttachmentOptimal,
 		.srcQueueFamilyIndex = vk::QueueFamilyForeignEXT,
-		.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+		.dstQueueFamilyIndex = render.queue_family_index,
 		.image = *frame.image,
 		.subresourceRange = {
 			.aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -1075,9 +1100,13 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 	struct {
 		// uint in vulkan is highp by default (32 bits, can use mediump or lowp to change precision)
 		std::uint32_t resource_heap_offset;
+        vk::DeviceAddress resource_heap_view;
+        std::uint32_t resource_heap_view_stride_words;
 		std::uint32_t sampler_heap_offset;
 	} push_data = {
 		.resource_heap_offset = render.heap_properties.resource_heap_start_offset,
+        .resource_heap_view = render.resource_heap.gpu_address  + render.heap_properties.resource_heap_start_offset,
+        .resource_heap_view_stride_words = static_cast<std::uint32_t>(render.heap_properties.resource_stride / 4), // Stride is in words
 		.sampler_heap_offset = render.heap_properties.sampler_heap_start_offset,
 	};
 
