@@ -14,7 +14,7 @@
 // https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html
 
 #define RESOURCE resourceHeap.resources[instanceIndex]
-#define SAMPLER samplerHeap.samplers[RESOURCE.samplerIndex]
+// #define SAMPLER samplerHeap.samplers[RESOURCE.samplerIndex]
 
 // Declares a pointer, to a buffer as a type
 /* For some reason, atleast on my nvidia card (ver 615), any arbitrary data
@@ -30,7 +30,7 @@ layout(buffer_reference) buffer View {
 
 // This assumes that the resource is also aligned to a 4 byte boundary, which I can't see ever not happening
 #define VIEW_N(n) pushData.resourceHeapView.views[(instanceIndex * (pushData.resourceHeapViewStrideWords)) + n]
-// #define SAMPLER samplerHeap.samplers[VIEW_N(4)]
+#define SAMPLER floatBitsToUint(samplerHeap.samplers[VIEW_N(4)])
 
 layout(push_constant) uniform PushData {
     uint resourceHeapOffset;

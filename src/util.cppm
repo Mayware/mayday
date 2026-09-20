@@ -27,6 +27,7 @@ T& gimme_data(Target&& target) {
 	}
 }
 
+// the reference is a pointer to Reality* anyway, so we are just casting from a void*
 export template<typename Target>
 Reality& gimme_reality(Target&& target) {
 	if constexpr (requires { target.server.reference; }) {
@@ -91,7 +92,7 @@ T increment_wrap(T value, T upper) {
 
 export template<typename T>
 T align_to(T value, T alignment) {
-	assert(std::has_single_bit(alignment) && "Alignment must be a power of 2!");
+	static_assert(std::has_single_bit(alignment) && "Alignment must be a power of 2!");
 	auto minor = alignment - 1;
 	// Imagine alignment is 4, and value is 3. 3 + 4 = 7, so 00000111. 4-1=11 ~11 = 00. 111 & 00 = 100, which is 4.
 	// Alignment must be a power of 2 so we just have 1 bit as alignment eg, 001000, and when we -1 it becomes 000111.

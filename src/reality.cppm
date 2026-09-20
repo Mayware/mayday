@@ -120,7 +120,6 @@ export struct Render {
 	vk::raii::Device device;
 	std::uint32_t queue_family_index;
 	vk::raii::Queue queue;
-	std::mutex queue_mutex;
 	vk::raii::Pipeline graphics_pipeline;
 	vk::raii::Semaphore semaphore;
 	std::uint64_t semaphore_value = 0; // This is the current value, ie. something will be yielding on this, it's not the one free after

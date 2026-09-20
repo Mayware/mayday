@@ -43,7 +43,7 @@ export class Mayday : public Reality {
 
 	Mayday(std::string device_path, dev_t device_rdev) : Reality {.render = get_shit(device_rdev)} {
 		//* MISC *//
-		auto misc = Misc {
+		misc = Misc {
 			.device_path = device_path,
 			.device_rdev = device_rdev,
 		};
@@ -110,6 +110,14 @@ export class Mayday : public Reality {
 		regenerate_monitors();
 
 		//* SERVER *//
+		// Upcasting, the base class (i.e. reality), sits inside of mayday (the derived class)
+        // And will be initialised as a whole unti (i.e. it will be contiguous in memory, like a standalone object would be)
+        // The compiler knows the memory offset reality sits within mayday, and hence can static_cast
+        // the mayday address, returning the address of the reality object within mayday.
+        // Given base classes are initialised before mayday's members, I would imagine the address of reality to be the same
+        // as maydays, as mayday's size would just extend further to cover its sole unique field of mayquill::server.
+        // (and hence, it would be funny and perhaps possible to just shove mayday's address into there, since they're probably the same)
+        // We can later just use this reference, to get reality back, completely safely
 		server.reference = static_cast<Reality*>(this);
 		server.bind_socket();
 	}
