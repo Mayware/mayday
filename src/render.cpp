@@ -169,8 +169,8 @@ VkMonitor Mayday::get_vk_monitor(std::uint32_t width, std::uint32_t height, std:
 		.pDrmFormatModifiers = drm_modifiers_ids.data(),
 	};
 
-    // Tell the image, that it will be a dmabuf. This label constricts available options (such as not allowing tiling to be specified as optimal),
-    // and lets it be used with dmabuf exportable memory
+	// Tell the image, that it will be a dmabuf. This label constricts available options (such as not allowing tiling to be specified as optimal),
+	// and lets it be used with dmabuf exportable memory
 	vk::ExternalMemoryImageCreateInfo external_info = {
 		.pNext = &potential_modifiers_info,
 		.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
@@ -514,9 +514,9 @@ Render Mayday::get_shit(dev_t device_rdev) {
 			supported_12.timelineSemaphore == false ||
 			// Ability to get the GPU address of a buffer on the GPU
 			supported_12.bufferDeviceAddress == false ||
-            // Used in the shader for layout(heap_offset = myOffset), the offset is in bytes (and hence, it indexes
-            // into a byte array, and to support one byte values, it needs int8 support
-            supported_12.shaderInt8 == false ||
+			// Used in the shader for layout(heap_offset = myOffset), the offset is in bytes (and hence, it indexes
+			// into a byte array, and to support one byte values, it needs int8 support
+			supported_12.shaderInt8 == false ||
 			// QOL features, the main one we use is that we can pass the shader module info directly to the pipeline now,
 			// and the pipeline will create the module. Without this, we would need to do
 			// auto vert_shader_module = device.createShaderModule(vert_shader_info); and then pass that to the pipeline.
@@ -569,7 +569,7 @@ Render Mayday::get_shit(dev_t device_rdev) {
 				.ppEnabledExtensionNames = required_device_extensions.data(),
 			},
 			{
-                .shaderInt8 = true,
+				.shaderInt8 = true,
 				.timelineSemaphore = true,
 				.bufferDeviceAddress = true,
 			},
@@ -764,6 +764,11 @@ Render Mayday::get_shit(dev_t device_rdev) {
 	};
 }
 
+// The state of the store is consistent across multiple draw calls. Meaning, writing into a heap during a draw call, will affect another draw
+// call already in flight (it will read that new data, or the data as it is being written).
+// Hence we have some sort of "arena" model within the heap, with each monitor getting a fixed allocation (currently 1024 descriptors) within
+// the heap, and the monitor index determines which 1024*i offset they can access. 
+// Since the monitors refresh in parallel, without this, they would constantly be overwriting the same area in the heap.
 void Mayday::regenerate_heaps() {
 	// Create sampler + resource heaps
 	auto create_heap_buffer = [this](std::uint64_t size) -> HeapBuffer {
@@ -1100,13 +1105,13 @@ void Mayday::render_monitor(std::uint32_t monitor_index, std::uint32_t frame_ind
 	struct {
 		// uint in vulkan is highp by default (32 bits, can use mediump or lowp to change precision)
 		std::uint32_t resource_heap_offset;
-        vk::DeviceAddress resource_heap_view;
-        std::uint32_t resource_heap_view_stride_words;
+		vk::DeviceAddress resource_heap_view;
+		std::uint32_t resource_heap_view_stride_words;
 		std::uint32_t sampler_heap_offset;
 	} push_data = {
 		.resource_heap_offset = render.heap_properties.resource_heap_start_offset,
-        .resource_heap_view = render.resource_heap.gpu_address  + render.heap_properties.resource_heap_start_offset,
-        .resource_heap_view_stride_words = static_cast<std::uint32_t>(render.heap_properties.resource_stride / 4), // Stride is in words
+		.resource_heap_view = render.resource_heap.gpu_address + render.heap_properties.resource_heap_start_offset,
+		.resource_heap_view_stride_words = static_cast<std::uint32_t>(render.heap_properties.resource_stride / 4), // Stride is in words
 		.sampler_heap_offset = render.heap_properties.sampler_heap_start_offset,
 	};
 

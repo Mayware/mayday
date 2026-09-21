@@ -139,10 +139,19 @@ class WlSurfaceData {
 			delta.slave_deltas.push_back(&rear_delta);
 		}
 
+        // We check if a non-null buffer is attached
+        // If so, we check if the shm part of the buffer data is set, and if so, we start its upload (which will set data.inner)
+        //
+        // The DMABUF "upload" (i.e. CreateImmed / Create on wayland end), immediately uploads into data.inner (there is nothing to wait for).
+        //
+        // However, the image is not yet useable - it must still be transitioned into the correct layout. The client may have attached
+        // additional syncpoints that we must wait for, until we can transition the image's layout (i.e. we are not allowed to access the image yet)
+        // Therefore, we move the layout transition logic into can_apply_deltas, where we also check the associated constraints, and transition when
+        // we are allowed to. Transitioning the image layout, will then set data.dmabuf with the semaphore value associated with it.
+        // Keep that in mind, for shm it's data.shm -> upload -> data.inner, whereas for dmabuf it is data.inner -> transition -> data.dmabuf,
+        // where data.dmabuf contains when that transition will be finished (and hence, when data.inner can be used)
 		if (delta.buffer_friends.buffer and *delta.buffer_friends.buffer) {
 			auto& data = gimme_data<WlBufferData>(client.get_object<WlBuffer>(**delta.buffer_friends.buffer));
-			// Only the shm path sets the optional. Dmabuf is uploaded immediately already
-			// data.shm being some, and inner being none means that the kicker hasn't yet been started
 			if (data.shm) {
 				auto& upload = *data.shm;
 				// The lock indicates that the uploader is not yet finished, it's automatically dropped at scope end
